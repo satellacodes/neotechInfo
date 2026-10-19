@@ -57,12 +57,12 @@ struct {
 
 // ============ BLE CALLBACKS ============
 class SrvCb : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer* s) override {
+  void onConnect(NimBLEServer* pServer,NimBLEConnInfo& connInfo) override {
     bleConnected = true;
     NimBLEDevice::setMTU(247);            // packet besar untuk JSON nav
     Serial.println("[BLE] connected");
   }
-  void onDisconnect(NimBLEServer* s) override {
+  void onDisconnect(NimBLEServer* pServer,NimBLEConnInfo& connInfo, int reason) override {
     bleConnected = false;
     Serial.println("[BLE] disconnected");
     NimBLEDevice::startAdvertising();
@@ -72,9 +72,9 @@ class SrvCb : public NimBLEServerCallbacks {
 void handleCommand(const String& js);
 
 class RxCb : public NimBLECharacteristicCallbacks {
-  void onWrite(NimBLECharacteristic* c) override {
-    std::string v = c->getValue();
-    if (v.empty()) return;
+  void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) override {
+    std::string value = pCharacteristic->getValue();
+    if (value.empty()) return;
     handleCommand(String(v.c_str()));
   }
 };
@@ -316,9 +316,9 @@ void setup() {
 
   auto* adv = NimBLEDevice::getAdvertising();
   adv->addServiceUUID(SVC_UUID);
-  adv->setScanResponse(true);
-  adv->setMinPreferred(0x06);
-  adv->setMinPreferred(0x12);
+  adv->setScanResponseData(true);
+  // adv->setMinPreferred(0x06);
+  // adv->setMinPreferred(0x12);
   adv->start();
 
   updateVoltage();
