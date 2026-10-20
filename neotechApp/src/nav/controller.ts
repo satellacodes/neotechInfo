@@ -15,6 +15,7 @@ export interface NavDebug {
   count: number;
   totalSeen: number;
   lastApp: string;
+  lastKeys: string;
   lastResult: string;
 }
 
@@ -26,6 +27,7 @@ let state: NavDebug = {
   count: 0,
   totalSeen: 0,
   lastApp: "-",
+  lastKeys: "-",
   lastResult: "-",
 };
 const listeners = new Set<() => void>();
@@ -55,7 +57,11 @@ let lastKey = "";
 let lastSent = 0;
 
 export async function handleNotification(raw: RawNotification) {
-  set({ totalSeen: state.totalSeen + 1, lastApp: String(raw.app ?? "?") });
+  set({
+    totalSeen: state.totalSeen + 1,
+    lastApp: String(raw.app ?? "?"),
+    lastKeys: Object.keys(raw).slice(0, 8).join(","),
+  });
   if (raw.app !== MAPS_PKG) return;
   console.log("[nav] maps notif", JSON.stringify(raw));
   set({ lastRaw: raw });
