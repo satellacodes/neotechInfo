@@ -9,7 +9,6 @@ import {
   Subscription,
 } from "react-native-ble-plx";
 
-// lowercase supaya cocok dengan filter scan Android
 export const SVC = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 export const RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 export const TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
@@ -74,6 +73,19 @@ export async function requestBlePermissions(): Promise<boolean> {
   const P = PermissionsAndroid.PERMISSIONS;
   const G = PermissionsAndroid.RESULTS.GRANTED;
 
+  // Cek dulu TANPA dialog. Saat jalan di headless task (tidak ada Activity),
+  // memanggil request*() bisa gagal/hang dan koneksi BLE tidak pernah terbentuk.
+  try {
+    const need =
+      api >= 31
+        ? [P.BLUETOOTH_SCAN, P.BLUETOOTH_CONNECT]
+        : [P.ACCESS_FINE_LOCATION];
+    const have = await Promise.all(
+      need.map((p) => PermissionsAndroid.check(p)),
+    );
+    if (have.every(Boolean)) return true;
+  } catch {}
+
   if (api >= 31) {
     // Android 12+: BLUETOOTH_SCAN & BLUETOOTH_CONNECT wajib. Lokasi diminta juga (tidak fatal).
     const r = await PermissionsAndroid.requestMultiple([
@@ -83,6 +95,7 @@ export async function requestBlePermissions(): Promise<boolean> {
     ]);
     return r[P.BLUETOOTH_SCAN] === G && r[P.BLUETOOTH_CONNECT] === G;
   }
+  // (api < 31 jatuh ke bawah)
   // Android 11 ke bawah: hanya lokasi (izin BLUETOOTH_SCAN/CONNECT tidak ada di OS ini,
   // jika diminta hasilnya bukan GRANTED -> itulah bug pengecekan `every(GRANTED)` sebelumnya)
   const r = await PermissionsAndroid.request(P.ACCESS_FINE_LOCATION);
