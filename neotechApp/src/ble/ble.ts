@@ -9,6 +9,7 @@ import {
   Subscription,
 } from "react-native-ble-plx";
 
+// lowercase supaya cocok dengan filter scan Android
 export const SVC = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 export const RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 export const TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
@@ -24,6 +25,9 @@ export interface BleSnapshot {
   voltage: number | null;
   engineOn: boolean;
   engineSec: number | null;
+  /** teks idle yang tersimpan di ESP32 (null = belum diterima) */
+  idleName: string | null;
+  idleLine2: string | null;
 }
 
 // ---------- store kecil untuk UI ----------
@@ -33,6 +37,8 @@ let snap: BleSnapshot = {
   voltage: null,
   engineOn: false,
   engineSec: null,
+  idleName: null,
+  idleLine2: null,
 };
 const listeners = new Set<() => void>();
 function setSnap(p: Partial<BleSnapshot>) {
@@ -138,6 +144,13 @@ function scan(m: BleManager, timeoutMs: number): Promise<Device> {
 function parseTelemetry(b64: string | null | undefined) {
   if (!b64) return;
   const txt = Buffer.from(b64, "base64").toString("utf8");
+  if (txt.startsWith("I|")) {
+    // "I|nama|baris2" — teks idle yang tersimpan di ESP32
+    const q = txt.split("|");
+    if (q.length >= 3)
+      setSnap({ idleName: q[1], idleLine2: q.slice(2).join("|") });
+    return;
+  }
   const p = txt.split(",");
   if (p.length < 3) return;
   const v = parseFloat(p[0]);
@@ -164,7 +177,7 @@ async function connectOnce(): Promise<boolean> {
   const found = await scan(m, SCAN_TIMEOUT_MS);
 
   setSnap({ link: "connecting" });
-  await new Promise((r) => setTimeout(r, 200)); // beri jeda setelah stop scan
+  await new Promise<void>((r) => setTimeout(r, 200)); // beri jeda setelah stop scan
   const dev = await found.connect({
     autoConnect: false,
     requestMTU: 247,
@@ -179,7 +192,13 @@ async function connectOnce(): Promise<boolean> {
     telemetrySub?.remove();
     telemetrySub = null;
     device = null;
-    setSnap({ link: "off", voltage: null });
+    setSnap({
+      link: "off",
+      voltage: null,
+      engineSec: null,
+      idleName: null,
+      idleLine2: null,
+    });
     if (wantConnected) scheduleRetry();
   });
 

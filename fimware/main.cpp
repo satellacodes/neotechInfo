@@ -1,5 +1,21 @@
+/*
+ * GL Pro Neotech Smart Display  v2.1
+ * Fitur : tegangan aki realtime, jam mesin (jam:menit), navigasi BLE dari HP
+ * Board : ESP32 Dev Module (Arduino core 2.x / 3.x)
+ * OLED  : SSD1306 128x64 I2C (0.96")
+ * Lib   : U8g2, NimBLE-Arduino 2.x, ArduinoJson 7
+ *
+ * Catatan kestabilan:
+ *  - Callback BLE TIDAK menyentuh state display. Perintah dimasukkan ke queue,
+ *    lalu diproses di loop() -> tidak ada race condition / crash.
+ *  - Tidak memakai String Arduino untuk data nav (anti fragmentasi heap).
+ *  - Advertising di-restart otomatis + watchdog advertising di loop.
+ *  - Deteksi mesin pakai histeresis + debounce.
+ *  - OLED di-init ulang berkala (jaga-jaga glitch listrik motor).
+ */
 
-
+#include <Arduino.h>
+#include <math.h>
 #include <Wire.h>
 #include <U8g2lib.h>
 #include <NimBLEDevice.h>
@@ -62,6 +78,18 @@ unsigned long lastDispInit   = 0;
 unsigned long lastAdvCheck   = 0;
 uint8_t       contrastVal    = 255;
 
+// splash saat pertama dialiri daya, lalu layar idle
+#define BOOT_MS 2600UL
+unsigned long bootStart = 0;
+
+// teks idle (bisa diubah dari app, disimpan di flash)
+#define DEF_NAME  "Dimas"
+#define DEF_LINE2 "mau kemana hari ini?"
+char          idleName[20]  = DEF_NAME;
+char          idleLine2[28] = DEF_LINE2;
+volatile bool forceInfo     = false;
+uint8_t       infoTick      = 0;
+
 struct NavData {
   char arrow[16];
   char distance[20];
@@ -109,6 +137,25 @@ void copyAscii(char* dst, size_t cap, const char* src) {
     dst[i] = (ch >= 32 && ch < 127) ? (char)ch : '?';
   }
   dst[i] = 0;
+}
+
+// ASCII-only, buang '|' (pemisah protokol), trim spasi
+void copyLabel(char* dst, size_t cap, const char* src) {
+  copyAscii(dst, cap, src);
+  for (char* p = dst; *p; p++) if (*p == '|') *p = '/';
+  size_t n = strlen(dst);
+  while (n && dst[n - 1] == ' ') dst[--n] = 0;
+  char* s = dst;
+  while (*s == ' ') s++;
+  if (s != dst) memmove(dst, s, strlen(s) + 1);
+}
+
+// Pilih font terbesar yang muat dalam maxW piksel
+void fitFont(const char* s, const uint8_t* const* fonts, int n, int maxW) {
+  for (int i = 0; i < n; i++) {
+    u8g2.setFont(fonts[i]);
+    if (u8g2.getStrWidth(s) <= maxW) return;
+  }
 }
 
 // ============ BACA TEGANGAN ============
@@ -231,19 +278,97 @@ void drawBtBadge() {
   }
 }
 
-void drawIdle() {
-  u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_helvB08_tr);
-  u8g2.drawStr(2, 10, "Hai Dimas,");
-  u8g2.setFont(u8g2_font_helvB12_tr);
-  u8g2.drawStr(2, 28, "mau kemana");
-  u8g2.drawStr(2, 46, "hari ini?");
+static void drawCentered(const char* s, int y) {
+  int w = u8g2.getStrWidth(s);
+  u8g2.drawStr((128 - w) / 2, y, s);
+}
 
+// Layar idle: status bar tipis, sapaan besar di tengah, garis jalan bergerak
+void drawIdle(unsigned long now) {
+  static const uint8_t* const F_NAME[]  = {u8g2_font_helvB18_tr, u8g2_font_helvB14_tr,
+                                           u8g2_font_helvB12_tr, u8g2_font_helvB10_tr,
+                                           u8g2_font_helvB08_tr};
+  static const uint8_t* const F_LINE2[] = {u8g2_font_helvR10_tr, u8g2_font_helvR08_tr,
+                                           u8g2_font_5x7_tr};
+  u8g2.clearBuffer();
+
+  // status bar
   u8g2.setFont(u8g2_font_5x7_tr);
-  char buf[32];
-  snprintf(buf, sizeof(buf), "%.1fV   %s", batteryVoltage,
-           bleConnected ? "BT-OK" : "BT--");
-  u8g2.drawStr(2, 62, buf);
+  u8g2.drawStr(2, 8, "GL PRO NEOTECH");
+  char v[10];
+  snprintf(v, sizeof(v), "%.1fV", batteryVoltage);
+  int vw = u8g2.getStrWidth(v);
+  u8g2.drawStr(126 - vw, 8, v);
+  int bx = 126 - vw - 8;
+  if (bleConnected) u8g2.drawDisc(bx, 5, 2);     // BT tersambung = bulat penuh
+  else              u8g2.drawCircle(bx, 5, 2);   // belum = bulat kosong
+  u8g2.drawHLine(0, 11, 128);
+
+  // sapaan
+  char greet[40];
+  snprintf(greet, sizeof(greet), "Hai, %s", idleName);
+  fitFont(greet, F_NAME, 5, 124);
+  drawCentered(greet, 36);
+
+  // teks kedua
+  fitFont(idleLine2, F_LINE2, 3, 124);
+  drawCentered(idleLine2, 52);
+
+  // garis jalan bergerak
+  int off = (int)((now / 40) % 14);
+  for (int x = -off; x < 128; x += 14) u8g2.drawHLine(x, 62, 8);
+
+  u8g2.sendBuffer();
+}
+
+// ============ BOOT LOGO ============
+void drawBike(int ox, int oy, unsigned long t) {
+  const int R = 9;
+  const int rcx = ox + 11, fcx = ox + 73, cy = oy + 20;
+  const int cxs[2] = {rcx, fcx};
+  const float a = t / 90.0f;
+  for (int i = 0; i < 2; i++) {                  // roda + jari-jari berputar
+    u8g2.drawCircle(cxs[i], cy, R, U8G2_DRAW_ALL);
+    u8g2.drawCircle(cxs[i], cy, R - 1, U8G2_DRAW_ALL);
+    u8g2.drawDisc(cxs[i], cy, 2);
+    for (int k = 0; k < 2; k++) {
+      float th = a + k * 1.5708f;
+      int dx = (int)(cosf(th) * (R - 2)), dy = (int)(sinf(th) * (R - 2));
+      u8g2.drawLine(cxs[i] - dx, cy - dy, cxs[i] + dx, cy + dy);
+    }
+  }
+  u8g2.drawRBox(ox + 12, oy + 8, 24, 4, 1);      // jok
+  u8g2.drawRBox(ox + 36, oy + 4, 19, 8, 3);      // tangki
+  u8g2.drawBox(ox + 29, oy + 15, 15, 9);         // mesin
+  u8g2.drawLine(ox + 14, oy + 12, ox + 30, oy + 17);
+  u8g2.drawLine(ox + 11, oy + 20, ox + 30, oy + 22);   // swingarm
+  u8g2.drawLine(ox + 12, oy + 12, ox + 11, oy + 20);   // fender belakang
+  u8g2.drawLine(ox + 73, oy + 20, ox + 60, oy + 5);    // fork
+  u8g2.drawLine(ox + 74, oy + 20, ox + 61, oy + 5);
+  u8g2.drawLine(ox + 55, oy + 12, ox + 60, oy + 6);
+  u8g2.drawHLine(ox + 57, oy + 3, 7);                  // stang
+  u8g2.drawHLine(ox + 57, oy + 4, 7);
+  u8g2.drawDisc(ox + 64, oy + 9, 2);                   // lampu
+  u8g2.drawLine(ox + 30, oy + 25, ox + 16, oy + 27);   // knalpot
+  u8g2.drawLine(ox + 16, oy + 27, ox + 13, oy + 25);
+}
+
+void drawBoot(unsigned long el) {
+  float t = el / 900.0f;                         // motor meluncur masuk dari kiri
+  if (t > 1) t = 1;
+  float e = 1 - (1 - t) * (1 - t) * (1 - t);
+  int ox = 22 - (int)((1 - e) * 110);
+
+  u8g2.clearBuffer();
+  drawBike(ox, 4, el);
+  if (el > 700) {
+    u8g2.setFont(u8g2_font_helvB10_tr);
+    drawCentered("GL PRO NEOTECH", 52);
+  }
+  int bw = (int)(96.0f * el / BOOT_MS);
+  if (bw > 96) bw = 96;
+  u8g2.drawFrame(14, 58, 100, 5);
+  u8g2.drawBox(16, 60, bw, 1);
   u8g2.sendBuffer();
 }
 
@@ -424,6 +549,19 @@ void handleCommand(const char* js) {
     idleDisplay = true;
     lastDraw = 0;
   }
+  else if (!strcmp(cmd, "idle_text")) {
+    if (doc["name"].is<const char*>())
+      copyLabel(idleName, sizeof(idleName), doc["name"].as<const char*>());
+    if (doc["line2"].is<const char*>())
+      copyLabel(idleLine2, sizeof(idleLine2), doc["line2"].as<const char*>());
+    if (!idleName[0])  strcpy(idleName, DEF_NAME);       // kosong -> default
+    if (!idleLine2[0]) strcpy(idleLine2, DEF_LINE2);
+    prefs.putString("name", idleName);
+    prefs.putString("line2", idleLine2);
+    idleDisplay = true;                                  // langsung tampilkan hasilnya
+    forceInfo   = true;
+    lastDraw    = 0;
+  }
   else if (!strcmp(cmd, "contrast")) {
     contrastVal = constrain((int)(doc["val"] | 255), 0, 255);
     u8g2.setContrast(contrastVal);
@@ -455,9 +593,16 @@ void notifyTelemetry(unsigned long now) {
   if (!bleConnected || !pTxChar) return;
   if (now - lastNotify < 1000) return;
   lastNotify = now;
-  char buf[32];
-  int n = snprintf(buf, sizeof(buf), "%.2f,%d,%lu",
-                   batteryVoltage, engineRunning ? 1 : 0, totalEngineSec);
+  char buf[72];
+  int n;
+  if (forceInfo || ++infoTick >= 5) {            // tiap ~5 dtk: kirim teks idle ("I|nama|baris2")
+    infoTick  = 0;
+    forceInfo = false;
+    n = snprintf(buf, sizeof(buf), "I|%s|%s", idleName, idleLine2);
+  } else {                                       // selain itu: telemetri CSV
+    n = snprintf(buf, sizeof(buf), "%.2f,%d,%lu",
+                 batteryVoltage, engineRunning ? 1 : 0, totalEngineSec);
+  }
   pTxChar->setValue((const uint8_t*)buf, n);
   pTxChar->notify();
 }
@@ -500,8 +645,18 @@ void setup() {
   totalEngineSec = prefs.getULong("engsec", 0);
   lastSavedSec   = totalEngineSec;
 
+  {
+    String n  = prefs.getString("name", DEF_NAME);
+    String l2 = prefs.getString("line2", DEF_LINE2);
+    copyLabel(idleName, sizeof(idleName), n.c_str());
+    copyLabel(idleLine2, sizeof(idleLine2), l2.c_str());
+    if (!idleName[0])  strcpy(idleName, DEF_NAME);
+    if (!idleLine2[0]) strcpy(idleLine2, DEF_LINE2);
+  }
+
   updateVoltage();
-  drawIdle();                                // tampil sapaan secepat mungkin
+  bootStart = millis();
+  drawBoot(0);                               // logo langsung tampil
 
   cmdQueue = xQueueCreate(6, sizeof(Msg));
 
@@ -560,11 +715,14 @@ void loop() {
   }
 
   // render
-  unsigned long interval = (!idleDisplay && displayMode == 2) ? 100 : 250;
+  bool booting = (now - bootStart) < BOOT_MS;
+  unsigned long interval = booting ? 40 : (idleDisplay ? 60 : (displayMode == 2 ? 100 : 250));
   if (now - lastDraw >= interval) {
     lastDraw = now;
-    if (idleDisplay) {
-      drawIdle();
+    if (booting) {
+      drawBoot(now - bootStart);
+    } else if (idleDisplay) {
+      drawIdle(now);
     } else {
       switch (displayMode) {
         case 0: drawVoltage(); break;

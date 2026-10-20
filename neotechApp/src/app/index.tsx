@@ -1,17 +1,18 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Alert,
   AppState,
   Platform,
+  RefreshControl,
   ScrollView,
   StatusBar,
   StyleSheet,
   Switch,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Animated, { FadeIn } from "react-native-reanimated";
 
 import {
   sendJson,
@@ -20,6 +21,23 @@ import {
   useBle,
 } from "../ble/ble";
 import { setAutoNav, useNavDebug } from "../nav/controller";
+import {
+  Button,
+  Card,
+  Collapsible,
+  ErrorBoundary,
+  PressableScale,
+  Segmented,
+  Skeleton,
+  StatusPill,
+  useToast,
+} from "../ui/components";
+import { C, R, S, T } from "../ui/theme";
+
+const DEF_NAME = "Dimas";
+const DEF_LINE2 = "mau kemana hari ini?";
+const NAME_MAX = 16;
+const LINE2_MAX = 24;
 
 const ARROWS = [
   "straight",
@@ -39,31 +57,62 @@ if (Platform.OS === "android") {
   NotifListener = require("react-native-android-notification-listener").default;
 }
 
+/** OLED hanya menampilkan ASCII — buang aksen & karakter lain, '|' dipakai protokol */
+const toLabel = (v: string) =>
+  v
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^\x20-\x7e]/g, "")
+    .replace(/\|/g, "/");
+
 function fmtEngine(sec: number | null) {
-  if (sec == null) return "--";
-  const h = Math.floor(sec / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  return `${h} jam ${m} menit`;
+  if (sec == null) return null;
+  return { h: Math.floor(sec / 3600), m: Math.floor((sec % 3600) / 60) };
 }
 
-export default function App() {
+function voltStatus(v: number) {
+  if (v < 11.8) return { t: "Aki lemah", c: C.danger };
+  if (v > 14.9) return { t: "Over charge", c: C.danger };
+  if (v >= 13.2) return { t: "Charging", c: C.ok };
+  if (v >= 12.4) return { t: "Aki OK", c: C.ok };
+  return { t: "Aki cukup", c: C.warn };
+}
+
+function Screen() {
+  const insets = useSafeAreaInsets();
   const ble = useBle();
   const nav = useNavDebug();
+  const { toast, show } = useToast();
 
   const [mode, setMode] = useState(0);
+  const [name, setName] = useState(DEF_NAME);
+  const [line2, setLine2] = useState(DEF_LINE2);
+  const dirty = useRef(false);
+  const [saving, setSaving] = useState(false);
+
   const [arrow, setArrow] = useState<string>("straight");
   const [distance, setDistance] = useState("150 m");
   const [street, setStreet] = useState("Jl. Sudirman");
   const [eta, setEta] = useState("14:32");
+  const [showManual, setShowManual] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
   const [notifPerm, setNotifPerm] = useState("unknown");
 
   const connected = ble.link === "connected";
   const busy = ble.link === "scanning" || ble.link === "connecting";
+  const hasData = ble.voltage != null;
 
-  // Mulai koneksi otomatis saat app dibuka (idempotent, aman untuk StrictMode)
   useEffect(() => {
     startAutoConnect();
   }, []);
+
+  // isi form dari nilai yang tersimpan di ESP32 (sekali, selama user belum mengetik)
+  useEffect(() => {
+    if (!dirty.current && ble.idleName != null && ble.idleLine2 != null) {
+      setName(ble.idleName);
+      setLine2(ble.idleLine2);
+    }
+  }, [ble.idleName, ble.idleLine2]);
 
   const refreshPerm = useCallback(async () => {
     if (!NotifListener) return;
@@ -73,291 +122,480 @@ export default function App() {
       setNotifPerm("unknown");
     }
   }, []);
-
   useEffect(() => {
     refreshPerm();
-    const sub = AppState.addEventListener("change", (s) => {
-      if (s === "active") refreshPerm();
+    const sub = AppState.addEventListener("change", (st) => {
+      if (st === "active") refreshPerm();
     });
     return () => sub.remove();
   }, [refreshPerm]);
 
-  const setModeAndSend = (m: number) => {
+  /** kirim + beri umpan balik; menolak halus jika belum terhubung */
+  const send = useCallback(
+    async (obj: object, okMsg?: string): Promise<boolean> => {
+      if (!connected) {
+        show("Belum terhubung ke ESP32", "err");
+        return false;
+      }
+      const ok = await sendJson(obj);
+      if (ok && okMsg) show(okMsg, "ok");
+      if (!ok) show("Gagal mengirim, coba lagi", "err");
+      return ok;
+    },
+    [connected, show],
+  );
+
+  const changeMode = (m: number) => {
     setMode(m);
-    sendJson({ cmd: "mode", val: m });
+    send({ cmd: "mode", val: m });
+  };
+
+  const writeIdle = async () => {
+    setSaving(true);
+    const n = toLabel(name).trim() || DEF_NAME;
+    const l = toLabel(line2).trim() || DEF_LINE2;
+    setName(n);
+    setLine2(l);
+    const ok = await send(
+      { cmd: "idle_text", name: n, line2: l },
+      "Tersimpan di display ✓",
+    );
+    if (ok) dirty.current = false;
+    setSaving(false);
+  };
+
+  const resetIdle = () => {
+    dirty.current = true;
+    setName(DEF_NAME);
+    setLine2(DEF_LINE2);
   };
 
   const sendNav = () => {
-    sendJson({ cmd: "nav", arrow, distance, street, eta, go: 1, auto: 0 });
+    send(
+      { cmd: "nav", arrow, distance, street, eta, go: 1, auto: 0 },
+      "Navigasi terkirim",
+    );
     setMode(2);
   };
 
-  const confirmReset = () =>
-    Alert.alert("Reset timer mesin?", "Jam mesin akan kembali ke 0.", [
-      { text: "Batal", style: "cancel" },
-      {
-        text: "Reset",
-        style: "destructive",
-        onPress: () => sendJson({ cmd: "reset_time" }),
-      },
-    ]);
+  const [confirmReset, setConfirmReset] = useState(false);
+  useEffect(() => {
+    if (!confirmReset) return;
+    const t = setTimeout(() => setConfirmReset(false), 3500);
+    return () => clearTimeout(t);
+  }, [confirmReset]);
+  const onReset = () => {
+    if (!confirmReset) {
+      setConfirmReset(true);
+      show("Tekan sekali lagi untuk reset", "info");
+      return;
+    }
+    setConfirmReset(false);
+    send({ cmd: "reset_time" }, "Timer mesin direset");
+  };
 
-  const linkText = connected
-    ? "✅ Terhubung ke ESP32"
-    : ble.link === "scanning"
-      ? "🔍 Mencari ESP32..."
-      : ble.link === "connecting"
-        ? "🔗 Menyambung..."
-        : "❌ Belum terhubung";
+  const pill = connected
+    ? { st: "ok" as const, tx: "Terhubung" }
+    : busy
+      ? {
+          st: "busy" as const,
+          tx: ble.link === "scanning" ? "Mencari..." : "Menyambung...",
+        }
+      : { st: "off" as const, tx: "Terputus" };
+
+  const eng = fmtEngine(ble.engineSec);
+  const vs = hasData ? voltStatus(ble.voltage!) : null;
 
   const raw = nav.lastRaw;
   const rawText = raw
     ? [raw.title, raw.text, raw.bigText, raw.subText].filter(Boolean).join("\n")
     : "(belum ada notifikasi Google Maps)";
 
+  const prevName = toLabel(name).trim() || DEF_NAME;
+  const prevLine2 = toLabel(line2).trim() || DEF_LINE2;
+
   return (
-    <ScrollView contentContainerStyle={s.root}>
+    <View style={{ flex: 1, backgroundColor: C.bg }}>
       <StatusBar barStyle="light-content" />
-      <Text style={s.title}>GL Pro Smart Display</Text>
-
-      {/* STATUS */}
-      <View style={s.card}>
-        <Text style={s.status}>{linkText}</Text>
-        {ble.error && !connected ? (
-          <Text style={s.err}>{ble.error}</Text>
-        ) : null}
-        {connected && (
-          <View style={s.live}>
-            <View style={s.liveBox}>
-              <Text style={s.liveVal}>
-                {ble.voltage != null ? ble.voltage.toFixed(2) : "--"}
-                <Text style={s.liveUnit}> V</Text>
-              </Text>
-              <Text style={s.liveLbl}>
-                Tegangan aki · {ble.engineOn ? "mesin ON" : "mesin OFF"}
-              </Text>
-            </View>
-            <View style={s.liveBox}>
-              <Text style={s.liveValSm}>{fmtEngine(ble.engineSec)}</Text>
-              <Text style={s.liveLbl}>Waktu mesin hidup</Text>
-            </View>
-          </View>
-        )}
-      </View>
-
-      <TouchableOpacity
-        style={[s.btn, connected && s.btnGray, busy && s.btnDim]}
-        disabled={busy}
-        onPress={() =>
-          connected || busy ? stopAutoConnect() : startAutoConnect()
+      <ScrollView
+        contentContainerStyle={{
+          padding: S.lg,
+          paddingTop: insets.top + S.lg,
+          paddingBottom: insets.bottom + 96,
+        }}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={
+          <RefreshControl
+            refreshing={false}
+            tintColor={C.accent}
+            onRefresh={() => {
+              if (!connected && !busy) startAutoConnect();
+              refreshPerm();
+            }}
+          />
         }
       >
-        <Text style={s.btnTxt}>
-          {connected
-            ? "Putuskan"
-            : busy
-              ? "Menghubungkan..."
-              : "Hubungkan ke ESP32"}
-        </Text>
-      </TouchableOpacity>
+        {/* HEADER */}
+        <Animated.View entering={FadeIn.duration(400)} style={st.header}>
+          <View style={{ flex: 1 }}>
+            <Text style={T.title}>GL Pro Display</Text>
+            <Text style={T.small}>Neotech · BLE</Text>
+          </View>
+          <StatusPill state={pill.st} text={pill.tx} />
+        </Animated.View>
 
-      {/* MODE */}
-      <Text style={s.h}>Mode Display</Text>
-      <View style={s.row}>
-        {["Tegangan", "Waktu", "Navigasi"].map((l, i) => (
-          <TouchableOpacity
-            key={l}
-            style={[s.mbtn, mode === i && s.mbtnOn]}
-            onPress={() => setModeAndSend(i)}
-          >
-            <Text style={[s.mtxt, mode === i && s.mtxtOn]}>{l}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-      <TouchableOpacity
-        style={[s.btn, s.btnGray]}
-        onPress={() => sendJson({ cmd: "idle" })}
-      >
-        <Text style={s.btnTxt}>Tampilkan Layar Idle</Text>
-      </TouchableOpacity>
-
-      {/* NAVIGASI OTOMATIS */}
-      {Platform.OS === "android" && (
-        <>
-          <Text style={s.h}>Navigasi Otomatis (Google Maps)</Text>
-          <View style={s.card}>
-            <View style={s.switchRow}>
-              <Text style={s.status}>Kirim belokan ke display</Text>
-              <Switch value={nav.enabled} onValueChange={setAutoNav} />
+        {/* LIVE */}
+        <Card title="Kondisi motor" index={0}>
+          {!connected && !busy && !hasData ? (
+            <View style={st.empty}>
+              <Text style={T.body}>Belum terhubung ke ESP32</Text>
+              <Text style={T.small}>
+                {ble.error ?? "Nyalakan motor / display, lalu sambungkan."}
+              </Text>
             </View>
+          ) : (
+            <View style={st.row}>
+              <View style={st.tile}>
+                <Text style={T.small}>Tegangan aki</Text>
+                {hasData ? (
+                  <Animated.Text
+                    key="v"
+                    entering={FadeIn.duration(250)}
+                    style={[T.big, { color: vs!.c }]}
+                  >
+                    {ble.voltage!.toFixed(2)}
+                    <Text style={st.unit}> V</Text>
+                  </Animated.Text>
+                ) : (
+                  <Skeleton w={96} h={38} style={{ marginVertical: 4 }} />
+                )}
+                {hasData ? (
+                  <Text style={[st.badge, { color: vs!.c }]}>{vs!.t}</Text>
+                ) : (
+                  <Skeleton w={60} h={12} />
+                )}
+              </View>
+              <View style={st.tile}>
+                <Text style={T.small}>Waktu mesin hidup</Text>
+                {eng ? (
+                  <Animated.Text
+                    key="e"
+                    entering={FadeIn.duration(250)}
+                    style={[T.big, { color: C.accent }]}
+                  >
+                    {eng.h}
+                    <Text style={st.unit}>j </Text>
+                    {String(eng.m).padStart(2, "0")}
+                    <Text style={st.unit}>m</Text>
+                  </Animated.Text>
+                ) : (
+                  <Skeleton w={110} h={38} style={{ marginVertical: 4 }} />
+                )}
+                {eng ? (
+                  <Text
+                    style={[st.badge, { color: ble.engineOn ? C.ok : C.sub }]}
+                  >
+                    {ble.engineOn ? "Mesin ON" : "Mesin OFF"}
+                  </Text>
+                ) : (
+                  <Skeleton w={60} h={12} />
+                )}
+              </View>
+            </View>
+          )}
+          <Button
+            label={
+              connected
+                ? "Putuskan"
+                : busy
+                  ? "Menghubungkan..."
+                  : "Hubungkan ke ESP32"
+            }
+            variant={connected ? "ghost" : "primary"}
+            loading={busy}
+            onPress={() => (connected ? stopAutoConnect() : startAutoConnect())}
+          />
+        </Card>
 
-            <Text style={s.lbl}>
-              Akses notifikasi:{" "}
-              {notifPerm === "authorized" ? "✅ aktif" : "❌ belum diberikan"}
+        {/* MODE */}
+        <Card title="Mode display" index={1}>
+          <Segmented
+            options={["Tegangan", "Waktu", "Navigasi"]}
+            value={mode}
+            onChange={changeMode}
+          />
+          <Button
+            label="Tampilkan layar idle"
+            variant="ghost"
+            onPress={() => send({ cmd: "idle" })}
+          />
+        </Card>
+
+        {/* IDLE EDITOR */}
+        <Card title="Teks layar idle" index={2}>
+          <View style={st.oled}>
+            <Text style={st.oledName} numberOfLines={1} adjustsFontSizeToFit>
+              Hai, {prevName}
             </Text>
-            {notifPerm !== "authorized" && (
-              <TouchableOpacity
-                style={s.btn}
-                onPress={() => NotifListener?.requestPermission()}
-              >
-                <Text style={s.btnTxt}>Beri Akses Notifikasi</Text>
-              </TouchableOpacity>
-            )}
-
-            <Text style={s.lbl}>Notifikasi Maps terakhir:</Text>
-            <Text style={s.mono}>{rawText}</Text>
-            <Text style={s.lbl}>Hasil parsing:</Text>
-            <Text style={s.mono}>
-              {nav.lastInfo
-                ? `arrow: ${nav.lastInfo.arrow}\njarak: ${nav.lastInfo.distance}\njalan: ${nav.lastInfo.street}\neta: ${nav.lastInfo.eta}`
-                : "-"}
+            <Text style={st.oledLine} numberOfLines={1} adjustsFontSizeToFit>
+              {prevLine2}
             </Text>
           </View>
-        </>
-      )}
+          <View>
+            <Text style={st.lbl}>Nama</Text>
+            <TextInput
+              style={st.input}
+              value={name}
+              maxLength={NAME_MAX}
+              placeholder={DEF_NAME}
+              placeholderTextColor={C.sub}
+              onChangeText={(v) => {
+                dirty.current = true;
+                setName(v);
+              }}
+            />
+            <Text style={st.count}>
+              {name.length}/{NAME_MAX}
+            </Text>
+          </View>
+          <View>
+            <Text style={st.lbl}>Teks kedua</Text>
+            <TextInput
+              style={st.input}
+              value={line2}
+              maxLength={LINE2_MAX}
+              placeholder={DEF_LINE2}
+              placeholderTextColor={C.sub}
+              onChangeText={(v) => {
+                dirty.current = true;
+                setLine2(v);
+              }}
+            />
+            <Text style={st.count}>
+              {line2.length}/{LINE2_MAX}
+            </Text>
+          </View>
+          <View style={st.row}>
+            <Button
+              label="Default"
+              variant="ghost"
+              onPress={resetIdle}
+              style={{ flex: 1 }}
+            />
+            <Button
+              label="Tulis ke display"
+              loading={saving}
+              onPress={writeIdle}
+              style={{ flex: 2 }}
+            />
+          </View>
+          <Text style={T.small}>
+            Hanya huruf, angka, dan tanda baca standar (aksen otomatis dibuang).
+          </Text>
+        </Card>
 
-      {/* NAVIGASI MANUAL */}
-      <Text style={s.h}>Navigasi Manual (tes)</Text>
-      <Text style={s.lbl}>Arah:</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-        {ARROWS.map((a) => (
-          <TouchableOpacity
-            key={a}
-            style={[s.chip, arrow === a && s.chipOn]}
-            onPress={() => setArrow(a)}
+        {/* NAV OTOMATIS */}
+        {Platform.OS === "android" && (
+          <Card title="Navigasi otomatis" index={3}>
+            <View style={st.between}>
+              <Text style={T.body}>Kirim belokan Google Maps</Text>
+              <Switch
+                value={nav.enabled}
+                onValueChange={setAutoNav}
+                trackColor={{ true: C.accentDim, false: C.surface2 }}
+                thumbColor={nav.enabled ? C.accent : C.sub}
+              />
+            </View>
+            <View style={st.between}>
+              <Text style={T.small}>Akses notifikasi</Text>
+              <Text
+                style={{
+                  color: notifPerm === "authorized" ? C.ok : C.danger,
+                  fontWeight: "700",
+                  fontSize: 12,
+                }}
+              >
+                {notifPerm === "authorized" ? "Aktif" : "Belum diberikan"}
+              </Text>
+            </View>
+            {notifPerm !== "authorized" && (
+              <Button
+                label="Beri akses notifikasi"
+                onPress={() => NotifListener?.requestPermission()}
+              />
+            )}
+            <PressableScale
+              onPress={() => setShowDebug((v) => !v)}
+              style={st.link}
+            >
+              <Text style={st.linkTxt}>
+                {showDebug ? "Sembunyikan debug" : "Lihat debug notifikasi"}
+              </Text>
+            </PressableScale>
+            <Collapsible open={showDebug}>
+              <Text style={st.lbl}>Notifikasi Maps terakhir</Text>
+              <Text style={st.mono}>{rawText}</Text>
+              <Text style={[st.lbl, { marginTop: S.md }]}>Hasil parsing</Text>
+              <Text style={st.mono}>
+                {nav.lastInfo
+                  ? `arrow : ${nav.lastInfo.arrow}\njarak : ${nav.lastInfo.distance}\njalan : ${nav.lastInfo.street}\neta   : ${nav.lastInfo.eta}`
+                  : "-"}
+              </Text>
+            </Collapsible>
+          </Card>
+        )}
+
+        {/* MANUAL */}
+        <Card title="Tes navigasi manual" index={4}>
+          <PressableScale
+            onPress={() => setShowManual((v) => !v)}
+            style={st.link}
           >
-            <Text style={[s.chipTxt, arrow === a && s.chipTxtOn]}>{a}</Text>
-          </TouchableOpacity>
-        ))}
+            <Text style={st.linkTxt}>
+              {showManual ? "Tutup" : "Buka form tes"}
+            </Text>
+          </PressableScale>
+          <Collapsible open={showManual}>
+            <View style={{ gap: S.md }}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                {ARROWS.map((a) => (
+                  <PressableScale
+                    key={a}
+                    onPress={() => setArrow(a)}
+                    style={[st.chip, arrow === a && st.chipOn]}
+                  >
+                    <Text
+                      style={[st.chipTxt, arrow === a && { color: "#04131f" }]}
+                    >
+                      {a}
+                    </Text>
+                  </PressableScale>
+                ))}
+              </ScrollView>
+              <TextInput
+                style={st.input}
+                value={distance}
+                onChangeText={setDistance}
+                placeholder="150 m"
+                placeholderTextColor={C.sub}
+              />
+              <TextInput
+                style={st.input}
+                value={street}
+                onChangeText={setStreet}
+                placeholder="Nama jalan"
+                placeholderTextColor={C.sub}
+              />
+              <TextInput
+                style={st.input}
+                value={eta}
+                onChangeText={setEta}
+                placeholder="14:32"
+                placeholderTextColor={C.sub}
+              />
+              <Button label="Kirim navigasi" onPress={sendNav} />
+            </View>
+          </Collapsible>
+        </Card>
+
+        {/* TIMER */}
+        <Card title="Zona hati-hati" index={5}>
+          <Button
+            label={confirmReset ? "Yakin? Tekan lagi" : "Reset timer mesin"}
+            variant="danger"
+            onPress={onReset}
+          />
+        </Card>
+
+        <Text style={[T.small, { textAlign: "center", lineHeight: 18 }]}>
+          Tips: set baterai neotechApp ke "Tidak dibatasi" agar koneksi BLE
+          tidak diputus Android saat layar mati.
+        </Text>
       </ScrollView>
-      <TextInput
-        style={s.input}
-        value={distance}
-        onChangeText={setDistance}
-        placeholder="150 m"
-        placeholderTextColor="#6e7681"
-      />
-      <TextInput
-        style={s.input}
-        value={street}
-        onChangeText={setStreet}
-        placeholder="Nama jalan"
-        placeholderTextColor="#6e7681"
-      />
-      <TextInput
-        style={s.input}
-        value={eta}
-        onChangeText={setEta}
-        placeholder="14:32"
-        placeholderTextColor="#6e7681"
-      />
-      <TouchableOpacity style={s.btn} onPress={sendNav}>
-        <Text style={s.btnTxt}>Kirim Navigasi</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity style={[s.btn, s.btnRed]} onPress={confirmReset}>
-        <Text style={s.btnTxt}>Reset Timer Mesin</Text>
-      </TouchableOpacity>
-
-      <Text style={s.hint}>
-        Tips di motor: Pengaturan HP → Aplikasi → neotechApp → Baterai → "Tidak
-        dibatasi", supaya Android tidak mematikan koneksi BLE saat layar mati.
-      </Text>
-    </ScrollView>
+      {toast}
+    </View>
   );
 }
 
-const s = StyleSheet.create({
-  root: {
-    padding: 20,
-    paddingTop: 55,
-    paddingBottom: 60,
-    backgroundColor: "#0d1117",
-    flexGrow: 1,
-  },
-  title: { color: "#fff", fontSize: 22, fontWeight: "800", marginBottom: 14 },
-  card: {
-    backgroundColor: "#161b22",
-    padding: 12,
-    borderRadius: 10,
-    marginBottom: 10,
-  },
-  status: { color: "#e6edf3", fontSize: 14 },
-  err: { color: "#f85149", fontSize: 12, marginTop: 6 },
-  live: { flexDirection: "row", gap: 10, marginTop: 12 },
-  liveBox: {
-    flex: 1,
-    backgroundColor: "#0d1117",
-    borderRadius: 8,
-    padding: 10,
-  },
-  liveVal: { color: "#3fb950", fontSize: 28, fontWeight: "800" },
-  liveUnit: { fontSize: 16, color: "#8b949e" },
-  liveValSm: {
-    color: "#58a6ff",
-    fontSize: 18,
-    fontWeight: "800",
-    marginTop: 6,
-  },
-  liveLbl: { color: "#8b949e", fontSize: 11, marginTop: 4 },
-  switchRow: {
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <Screen />
+    </ErrorBoundary>
+  );
+}
+
+const st = StyleSheet.create({
+  header: { flexDirection: "row", alignItems: "center", marginBottom: S.xl },
+  row: { flexDirection: "row", gap: S.md },
+  between: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 8,
   },
-  h: {
-    color: "#58a6ff",
-    fontSize: 15,
-    fontWeight: "700",
-    marginTop: 20,
-    marginBottom: 8,
-  },
-  btn: {
-    backgroundColor: "#238636",
-    padding: 14,
-    borderRadius: 10,
-    marginVertical: 6,
-    alignItems: "center",
-  },
-  btnDim: { backgroundColor: "#1f3b26" },
-  btnGray: { backgroundColor: "#30363d" },
-  btnRed: { backgroundColor: "#b62324" },
-  btnTxt: { color: "#fff", fontWeight: "800", fontSize: 15 },
-  row: { flexDirection: "row", gap: 8, marginBottom: 8 },
-  mbtn: {
+  tile: {
     flex: 1,
-    paddingVertical: 12,
-    backgroundColor: "#161b22",
-    borderRadius: 10,
-    alignItems: "center",
+    backgroundColor: C.surface2,
+    borderRadius: R.md,
+    padding: S.md,
+    gap: 2,
+    minHeight: 104,
   },
-  mbtnOn: { backgroundColor: "#238636" },
-  mtxt: { color: "#8b949e", fontSize: 13, fontWeight: "600" },
-  mtxtOn: { color: "#fff" },
-  lbl: { color: "#8b949e", marginTop: 8, marginBottom: 4, fontSize: 12 },
+  unit: { fontSize: 16, color: C.sub, fontWeight: "600" },
+  badge: { fontSize: 12, fontWeight: "700" },
+  empty: {
+    backgroundColor: C.surface2,
+    borderRadius: R.md,
+    padding: S.lg,
+    gap: S.xs,
+  },
+  oled: {
+    backgroundColor: C.oled,
+    borderRadius: R.md,
+    borderWidth: 1,
+    borderColor: C.border,
+    paddingVertical: S.lg,
+    paddingHorizontal: S.lg,
+    alignItems: "center",
+    gap: 6,
+  },
+  oledName: {
+    color: C.oledText,
+    fontSize: 24,
+    fontWeight: "800",
+    maxWidth: "100%",
+  },
+  oledLine: {
+    color: C.oledText,
+    fontSize: 14,
+    opacity: 0.85,
+    maxWidth: "100%",
+  },
+  lbl: { color: C.sub, fontSize: 12, marginBottom: 6, fontWeight: "600" },
+  count: { color: C.sub, fontSize: 11, textAlign: "right", marginTop: 4 },
+  input: {
+    backgroundColor: C.surface2,
+    color: C.text,
+    borderRadius: R.md,
+    paddingHorizontal: S.md,
+    height: 48,
+    fontSize: 15,
+  },
   mono: {
-    color: "#c9d1d9",
+    color: C.text,
     fontSize: 12,
     fontFamily: Platform.OS === "android" ? "monospace" : "Menlo",
   },
+  link: { alignSelf: "flex-start", paddingVertical: 4 },
+  linkTxt: { color: C.accent, fontWeight: "700", fontSize: 13 },
   chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: "#161b22",
-    borderRadius: 20,
-    marginRight: 8,
-    marginBottom: 6,
+    paddingHorizontal: S.md,
+    height: 36,
+    justifyContent: "center",
+    backgroundColor: C.surface2,
+    borderRadius: R.pill,
+    marginRight: S.sm,
   },
-  chipOn: { backgroundColor: "#238636" },
-  chipTxt: { color: "#8b949e", fontSize: 12 },
-  chipTxtOn: { color: "#fff", fontWeight: "700" },
-  input: {
-    backgroundColor: "#161b22",
-    color: "#fff",
-    padding: 12,
-    borderRadius: 10,
-    marginVertical: 5,
-  },
-  hint: { color: "#6e7681", fontSize: 12, marginTop: 20, lineHeight: 18 },
+  chipOn: { backgroundColor: C.accent },
+  chipTxt: { color: C.sub, fontSize: 12, fontWeight: "700" },
 });
