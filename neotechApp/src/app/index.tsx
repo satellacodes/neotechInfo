@@ -433,7 +433,13 @@ function Screen() {
               </Text>
             </PressableScale>
             <Collapsible open={showDebug}>
-              <Text style={st.lbl}>Notifikasi Maps terakhir</Text>
+              <Text style={st.lbl}>Diagnosa</Text>
+              <Text style={st.mono}>
+                {`notif diterima (semua app): ${nav.totalSeen}\nterakhir dari : ${nav.lastApp}\nnotif Maps lolos parse: ${nav.count}\nstatus terakhir: ${nav.lastResult}`}
+              </Text>
+              <Text style={[st.lbl, { marginTop: S.md }]}>
+                Notifikasi Maps terakhir
+              </Text>
               <Text style={st.mono}>{rawText}</Text>
               <Text style={[st.lbl, { marginTop: S.md }]}>Hasil parsing</Text>
               <Text style={st.mono}>
