@@ -1,6 +1,6 @@
 <div align="center">
 
-  <img src="assets/ProxyGo.png" alt="laravelProd Banner" width="100%"/>
+  <img src="assets/neotechInfo.png" alt="neotech Banner" width="100%"/>
 
   <br/>
   <br/>

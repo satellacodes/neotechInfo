@@ -7,8 +7,18 @@ const HEADLESS =
 
 module.exports = function withNotificationListener(config) {
   return withAndroidManifest(config, (cfg) => {
-    const app = cfg.modResults.manifest.application?.[0];
+    const manifest = cfg.modResults.manifest;
+    const app = manifest.application?.[0];
     if (!app) return cfg;
+
+    manifest.$["xmlns:tools"] = "http://schemas.android.com/tools";
+    const cur = (app.$["tools:replace"] || "")
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+    if (!cur.includes("android:allowBackup")) cur.push("android:allowBackup");
+    app.$["tools:replace"] = cur.join(",");
+
     app.service = app.service ?? [];
     const has = (n) => app.service.some((s) => s.$?.["android:name"] === n);
 
