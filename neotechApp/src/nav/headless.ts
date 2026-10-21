@@ -1,9 +1,9 @@
 import { AppRegistry, Platform } from "react-native";
 import { handleNotification } from "./controller";
+import "./speed";
 import type { RawNotification } from "./parser";
 
 if (Platform.OS === "android") {
-  // require di dalam guard supaya bundle iOS/web tidak memuat modul native Android
   const {
     RNAndroidNotificationListenerHeadlessJsName,
   } = require("react-native-android-notification-listener");

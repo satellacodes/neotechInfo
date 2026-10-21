@@ -9,7 +9,6 @@ import {
   Subscription,
 } from "react-native-ble-plx";
 
-// lowercase supaya cocok dengan filter scan Android
 export const SVC = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 export const RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 export const TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
@@ -25,12 +24,10 @@ export interface BleSnapshot {
   voltage: number | null;
   engineOn: boolean;
   engineSec: number | null;
-  /** teks idle yang tersimpan di ESP32 (null = belum diterima) */
   idleName: string | null;
   idleLine2: string | null;
 }
 
-// ---------- store kecil untuk UI ----------
 let snap: BleSnapshot = {
   link: "off",
   error: null,
@@ -56,7 +53,6 @@ export function useBle(): BleSnapshot {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-// ---------- manager ----------
 let manager: BleManager | null = null;
 function mgr(): BleManager {
   if (!manager) manager = new BleManager();
@@ -72,15 +68,12 @@ let busy: Promise<boolean> | null = null;
 let retryTimer: ReturnType<typeof setTimeout> | null = null;
 let retryDelay = 1000;
 
-// ---------- izin ----------
 export async function requestBlePermissions(): Promise<boolean> {
   if (Platform.OS !== "android") return true;
   const api = Number(Platform.Version);
   const P = PermissionsAndroid.PERMISSIONS;
   const G = PermissionsAndroid.RESULTS.GRANTED;
 
-  // Cek dulu TANPA dialog. Saat jalan di headless task (tidak ada Activity),
-  // memanggil request*() bisa gagal/hang dan koneksi BLE tidak pernah terbentuk.
   try {
     const need =
       api >= 31
@@ -93,7 +86,6 @@ export async function requestBlePermissions(): Promise<boolean> {
   } catch {}
 
   if (api >= 31) {
-    // Android 12+: BLUETOOTH_SCAN & BLUETOOTH_CONNECT wajib. Lokasi diminta juga (tidak fatal).
     const r = await PermissionsAndroid.requestMultiple([
       P.BLUETOOTH_SCAN,
       P.BLUETOOTH_CONNECT,
@@ -101,14 +93,10 @@ export async function requestBlePermissions(): Promise<boolean> {
     ]);
     return r[P.BLUETOOTH_SCAN] === G && r[P.BLUETOOTH_CONNECT] === G;
   }
-  // (api < 31 jatuh ke bawah)
-  // Android 11 ke bawah: hanya lokasi (izin BLUETOOTH_SCAN/CONNECT tidak ada di OS ini,
-  // jika diminta hasilnya bukan GRANTED -> itulah bug pengecekan `every(GRANTED)` sebelumnya)
   const r = await PermissionsAndroid.request(P.ACCESS_FINE_LOCATION);
   return r === G;
 }
 
-// ---------- scan ----------
 function scan(m: BleManager, timeoutMs: number): Promise<Device> {
   return new Promise((resolve, reject) => {
     let done = false;
@@ -126,7 +114,6 @@ function scan(m: BleManager, timeoutMs: number): Promise<Device> {
         ),
       timeoutMs,
     );
-    // Filter by service UUID: nama sering hanya ada di scan response, jadi jangan mengandalkan nama.
     m.startDeviceScan(
       [SVC],
       { scanMode: ScanMode.LowLatency, allowDuplicates: false },
@@ -134,7 +121,7 @@ function scan(m: BleManager, timeoutMs: number): Promise<Device> {
         if (err) return finish(() => reject(err));
         if (!d) return;
         const nm = d.name ?? d.localName;
-        if (nm && nm !== DEVICE_NAME) return; // perangkat lain dengan UUID sama
+        if (nm && nm !== DEVICE_NAME) return;
         finish(() => resolve(d));
       },
     );
@@ -145,7 +132,6 @@ function parseTelemetry(b64: string | null | undefined) {
   if (!b64) return;
   const txt = Buffer.from(b64, "base64").toString("utf8");
   if (txt.startsWith("I|")) {
-    // "I|nama|baris2" — teks idle yang tersimpan di ESP32
     const q = txt.split("|");
     if (q.length >= 3)
       setSnap({ idleName: q[1], idleLine2: q.slice(2).join("|") });
@@ -177,12 +163,12 @@ async function connectOnce(): Promise<boolean> {
   const found = await scan(m, SCAN_TIMEOUT_MS);
 
   setSnap({ link: "connecting" });
-  await new Promise<void>((r) => setTimeout(r, 200)); // beri jeda setelah stop scan
+  await new Promise<void>((r) => setTimeout(r, 200));
   const dev = await found.connect({
     autoConnect: false,
     requestMTU: 247,
     timeout: 10000,
-    refreshGatt: "OnConnected", // buang cache GATT lama (penting setelah ganti firmware)
+    refreshGatt: "OnConnected",
   });
   await dev.discoverAllServicesAndCharacteristics();
 
@@ -204,7 +190,7 @@ async function connectOnce(): Promise<boolean> {
 
   telemetrySub?.remove();
   telemetrySub = dev.monitorCharacteristicForService(SVC, TX, (err, ch) => {
-    if (err) return; // error saat disconnect -> ditangani onDisconnected
+    if (err) return;
     parseTelemetry(ch?.value);
   });
 
@@ -240,7 +226,6 @@ function scheduleRetry() {
   }, retryDelay);
 }
 
-/** Mulai koneksi otomatis + reconnect otomatis (backoff 1s → 10s). Aman dipanggil berulang. */
 export function startAutoConnect() {
   userStopped = false;
   if (wantConnected) {
@@ -254,7 +239,6 @@ export function startAutoConnect() {
   });
 }
 
-/** Dipakai headless task: sambungkan hanya jika user tidak sengaja memutus. */
 export function keepConnected() {
   if (!userStopped) startAutoConnect();
 }
@@ -270,7 +254,6 @@ export function stopAutoConnect() {
   device?.cancelConnection().catch(() => {});
 }
 
-// ---------- kirim (diserialkan agar tidak bentrok operasi GATT) ----------
 let txChain: Promise<unknown> = Promise.resolve();
 export function sendJson(obj: object): Promise<boolean> {
   const run = async () => {

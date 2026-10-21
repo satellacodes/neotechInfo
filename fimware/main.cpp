@@ -1,5 +1,5 @@
 /*
- * GL Pro Neotech Smart Display  v2.1
+ * GL Pro Neotech Smart Display  v2.2
  * Fitur : tegangan aki realtime, jam mesin (jam:menit), navigasi BLE dari HP
  * Board : ESP32 Dev Module (Arduino core 2.x / 3.x)
  * OLED  : SSD1306 128x64 I2C (0.96")
@@ -88,6 +88,12 @@ unsigned long bootStart = 0;
 char          idleName[20]  = DEF_NAME;
 char          idleLine2[28] = DEF_LINE2;
 volatile bool forceInfo     = false;
+
+// kecepatan GPS dari HP (cmd "speed")
+int           speedKmh      = 0;
+unsigned long speedAt       = 0;
+bool          speedActive   = false;   // true = HP mengirim kecepatan -> layout nav menampilkan speed
+#define SPEED_STALE_MS 5000UL
 uint8_t       infoTick      = 0;
 
 struct NavData {
@@ -362,7 +368,8 @@ void drawBoot(unsigned long el) {
   u8g2.clearBuffer();
   drawBike(ox, 4, el);
   if (el > 700) {
-    u8g2.setFont(u8g2_font_helvB10_tr);
+    static const uint8_t* const F_TITLE[] = {u8g2_font_helvB10_tr, u8g2_font_helvB08_tr};
+    fitFont("GL PRO NEOTECH", F_TITLE, 2, 124);   // jangan terpotong di tepi layar
     drawCentered("GL PRO NEOTECH", 52);
   }
   int bw = (int)(96.0f * el / BOOT_MS);
@@ -463,11 +470,24 @@ void drawNavWaiting() {
   u8g2.setFont(u8g2_font_helvB08_tr);
   u8g2.drawStr(2, 10, "NAVIGASI");
   drawBtBadge();
-  u8g2.setFont(u8g2_font_helvB12_tr);
+  // saat speed tampil di kanan, label mengecil agar tidak menempel pada angka 3 digit
+  u8g2.setFont(speedActive ? u8g2_font_helvB10_tr : u8g2_font_helvB12_tr);
   u8g2.drawStr(2, 34, "Menunggu");
   u8g2.drawStr(2, 50, "rute...");
-  u8g2.setFont(u8g2_font_5x7_tr);
-  u8g2.drawStr(2, 62, "Mulai rute di Google Maps");
+
+  if (speedActive) {                             // kecepatan tetap terlihat sebelum rute dimulai
+    char sp[8];
+    if (millis() - speedAt < SPEED_STALE_MS) snprintf(sp, sizeof(sp), "%d", speedKmh);
+    else                                      strcpy(sp, "--");
+    u8g2.setFont(u8g2_font_helvB18_tr);
+    u8g2.drawStr(126 - u8g2.getStrWidth(sp), 38, sp);
+    u8g2.setFont(u8g2_font_5x7_tr);
+    u8g2.drawStr(126 - u8g2.getStrWidth("km/h"), 48, "km/h");
+    u8g2.drawStr(2, 62, "Mulai rute di Maps");
+  } else {
+    u8g2.setFont(u8g2_font_5x7_tr);
+    u8g2.drawStr(2, 62, "Mulai rute di Google Maps");
+  }
   u8g2.sendBuffer();
 }
 
@@ -482,18 +502,40 @@ void drawNav() {
   drawArrowIcon(nav.arrow);
 
   // jarak (kanan atas) - font besar, turun ke font lebih kecil jika kepanjangan
-  u8g2.setFont(u8g2_font_helvB18_tr);
-  int dw = u8g2.getStrWidth(nav.distance);
-  if (dw > 80) { u8g2.setFont(u8g2_font_helvB14_tr); dw = u8g2.getStrWidth(nav.distance); }
-  u8g2.drawStr(126 - dw, 26, nav.distance);
+  static const uint8_t* const F_DIST[]    = {u8g2_font_helvB18_tr, u8g2_font_helvB14_tr,
+                                             u8g2_font_helvB12_tr};
+  // saat speed tampil, jarak memakai font lebih kecil supaya descender koma/"m" tidak menyentuh angka speed
+  static const uint8_t* const F_DIST_SP[] = {u8g2_font_helvB14_tr, u8g2_font_helvB12_tr};
 
-  // ETA
-  if (nav.eta[0]) {
-    char e[20];
-    snprintf(e, sizeof(e), "ETA %s", nav.eta);
-    u8g2.setFont(u8g2_font_helvB08_tr);
-    int ew = u8g2.getStrWidth(e);
-    u8g2.drawStr(126 - ew, 42, e);
+  if (speedActive) {
+    // ---- layout dengan kecepatan ----
+    // jarak y=15 (font 14) | kecepatan besar y=46 (kanan: "km/h" lalu ETA, font kecil)
+    fitFont(nav.distance, F_DIST_SP, 2, 80);
+    int dw = u8g2.getStrWidth(nav.distance);
+    u8g2.drawStr(126 - dw, 15, nav.distance);
+
+    char sp[8];
+    if (millis() - speedAt < SPEED_STALE_MS) snprintf(sp, sizeof(sp), "%d", speedKmh);
+    else                                      strcpy(sp, "--");      // GPS hilang/basi
+    u8g2.setFont(u8g2_font_helvB24_tr);
+    int sw = u8g2.getStrWidth(sp);
+    u8g2.drawStr(99 - sw, 46, sp);
+
+    u8g2.setFont(u8g2_font_5x7_tr);
+    u8g2.drawStr(126 - u8g2.getStrWidth("km/h"), 36, "km/h");
+    if (nav.eta[0]) u8g2.drawStr(126 - u8g2.getStrWidth(nav.eta), 46, nav.eta);
+  } else {
+    // ---- layout tanpa kecepatan (seperti sebelumnya) ----
+    fitFont(nav.distance, F_DIST, 3, 80);
+    int dw = u8g2.getStrWidth(nav.distance);
+    u8g2.drawStr(126 - dw, 26, nav.distance);
+    if (nav.eta[0]) {
+      char e[20];
+      snprintf(e, sizeof(e), "ETA %s", nav.eta);
+      u8g2.setFont(u8g2_font_helvB08_tr);
+      int ew = u8g2.getStrWidth(e);
+      u8g2.drawStr(126 - ew, 42, e);
+    }
   }
   if (bleConnected == false) {
     u8g2.setFont(u8g2_font_5x7_tr);
@@ -548,6 +590,17 @@ void handleCommand(const char* js) {
   else if (!strcmp(cmd, "idle")) {
     idleDisplay = true;
     lastDraw = 0;
+  }
+  else if (!strcmp(cmd, "speed")) {
+    int k = (int)(doc["kmh"] | -1);
+    if (k < 0) {                                 // HP mematikan fitur kecepatan
+      speedActive = false;
+    } else {
+      speedKmh    = constrain(k, 0, 299);
+      speedAt     = millis();
+      speedActive = true;
+    }
+    // tidak perlu force redraw: layar nav sudah refresh tiap 100 ms
   }
   else if (!strcmp(cmd, "idle_text")) {
     if (doc["name"].is<const char*>())
@@ -696,6 +749,7 @@ void loop() {
 
   updateEngine(now);
   processQueue();
+  if (!bleConnected) speedActive = false;        // HP putus -> kembali ke layout tanpa speed
   notifyTelemetry(now);
 
   // watchdog advertising: pastikan selalu bisa ditemukan HP saat tidak terhubung

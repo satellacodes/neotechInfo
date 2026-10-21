@@ -51,6 +51,15 @@
           "bluetoothAlwaysPermission": "Butuh Bluetooth untuk terhubung ke display motor."
         }
       ],
+      [
+        "expo-location",
+        {
+          "isAndroidBackgroundLocationEnabled": false,
+          "isAndroidForegroundServiceEnabled": true,
+          "locationAlwaysAndWhenInUsePermission": "Butuh lokasi untuk menampilkan kecepatan di display motor.",
+          "locationWhenInUsePermission": "Butuh lokasi untuk menampilkan kecepatan di display motor."
+        }
+      ],
       "./plugins/withNotificationListener"
     ],
     "experiments": {

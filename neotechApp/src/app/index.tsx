@@ -22,6 +22,12 @@ import {
 } from "../ble/ble";
 import { setAutoNav, useNavDebug } from "../nav/controller";
 import {
+  startSpeed,
+  stopSpeed,
+  syncSpeedRunning,
+  useSpeed,
+} from "../nav/speed";
+import {
   Button,
   Card,
   Collapsible,
@@ -82,6 +88,8 @@ function Screen() {
   const insets = useSafeAreaInsets();
   const ble = useBle();
   const nav = useNavDebug();
+  const speed = useSpeed();
+  const [speedBusy, setSpeedBusy] = useState(false);
   const { toast, show } = useToast();
 
   const [mode, setMode] = useState(0);
@@ -104,7 +112,20 @@ function Screen() {
 
   useEffect(() => {
     startAutoConnect();
+    syncSpeedRunning();
   }, []);
+
+  const toggleSpeed = async (on: boolean) => {
+    setSpeedBusy(true);
+    if (on) {
+      const r = await startSpeed();
+      if (!r.ok) show(r.msg ?? "Gagal mengaktifkan GPS", "err");
+      else show("Kecepatan GPS aktif", "ok");
+    } else {
+      await stopSpeed();
+    }
+    setSpeedBusy(false);
+  };
 
   // isi form dari nilai yang tersimpan di ESP32 (sekali, selama user belum mengetik)
   useEffect(() => {
@@ -451,8 +472,56 @@ function Screen() {
           </Card>
         )}
 
+        {/* KECEPATAN */}
+        {Platform.OS === "android" && (
+          <Card title="Kecepatan GPS" index={4}>
+            <View style={st.between}>
+              <Text style={T.body}>Tampilkan di layar navigasi</Text>
+              <Switch
+                value={speed.running}
+                disabled={speedBusy}
+                onValueChange={toggleSpeed}
+                trackColor={{ true: C.accentDim, false: C.surface2 }}
+                thumbColor={speed.running ? C.accent : C.sub}
+              />
+            </View>
+            {speed.running && (
+              <View style={st.tile}>
+                <Text style={T.small}>Kecepatan saat ini</Text>
+                {speed.kmh != null ? (
+                  <Animated.Text
+                    key="spd"
+                    entering={FadeIn.duration(200)}
+                    style={[T.big, { color: C.accent }]}
+                  >
+                    {speed.kmh}
+                    <Text style={st.unit}> km/h</Text>
+                  </Animated.Text>
+                ) : (
+                  <Skeleton w={110} h={38} style={{ marginVertical: 4 }} />
+                )}
+                <Text style={T.small}>
+                  {speed.accuracy != null
+                    ? `Akurasi GPS ±${Math.round(speed.accuracy)} m`
+                    : "Menunggu sinyal GPS..."}
+                </Text>
+              </View>
+            )}
+            {speed.error ? (
+              <Text style={{ color: C.danger, fontSize: 12 }}>
+                {speed.error}
+              </Text>
+            ) : null}
+            <Text style={T.small}>
+              Nyalakan saat app terbuka. Notifikasi "Kecepatan GPS aktif" akan
+              muncul — itu yang menjaga GPS tetap jalan saat Google Maps di
+              layar depan. Izin lokasi biasa sudah cukup.
+            </Text>
+          </Card>
+        )}
+
         {/* MANUAL */}
-        <Card title="Tes navigasi manual" index={4}>
+        <Card title="Tes navigasi manual" index={5}>
           <PressableScale
             onPress={() => setShowManual((v) => !v)}
             style={st.link}
@@ -505,7 +574,7 @@ function Screen() {
         </Card>
 
         {/* TIMER */}
-        <Card title="Zona hati-hati" index={5}>
+        <Card title="Zona hati-hati" index={6}>
           <Button
             label={confirmReset ? "Yakin? Tekan lagi" : "Reset timer mesin"}
             variant="danger"

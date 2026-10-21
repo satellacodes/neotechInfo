@@ -25,7 +25,6 @@ import Animated, {
 
 import { C, R, S, T } from "./theme";
 
-/* ───────── Press feedback: mengecil sedikit saat ditekan ───────── */
 export function PressableScale({
   onPress,
   disabled,
@@ -55,7 +54,6 @@ export function PressableScale({
   );
 }
 
-/* ───────── Button ───────── */
 type Variant = "primary" | "ghost" | "danger";
 export function Button({
   label,
@@ -100,7 +98,6 @@ export function Button({
   );
 }
 
-/* ───────── Card dengan animasi masuk berurutan ───────── */
 export function Card({
   title,
   index = 0,
@@ -128,7 +125,6 @@ export function Card({
   );
 }
 
-/* ───────── Skeleton (fallback loading) ───────── */
 export function Skeleton({
   w,
   h = 16,
@@ -163,7 +159,6 @@ export function Skeleton({
   );
 }
 
-/* ───────── Pill status koneksi dengan titik berdenyut ───────── */
 export function StatusPill({
   state,
   text,
@@ -195,7 +190,6 @@ export function StatusPill({
   );
 }
 
-/* ───────── Segmented control dengan indikator geser ───────── */
 export function Segmented({
   options,
   value,
@@ -232,7 +226,6 @@ export function Segmented({
   );
 }
 
-/* ───────── Toast ───────── */
 export type ToastKind = "ok" | "err" | "info";
 export function useToast() {
   const [t, setT] = useState<{
@@ -272,7 +265,6 @@ export function useToast() {
   return { toast: node, show };
 }
 
-/* ───────── Collapsible ───────── */
 export function Collapsible({
   open,
   children,
@@ -291,7 +283,6 @@ export function Collapsible({
   );
 }
 
-/* ───────── Error boundary: UI tidak blank jika ada crash render ───────── */
 export class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
   { err: Error | null }

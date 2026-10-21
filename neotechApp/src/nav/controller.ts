@@ -79,7 +79,7 @@ export async function handleNotification(raw: RawNotification) {
 
   const key = JSON.stringify(info);
   const now = Date.now();
-  if (key === lastKey && now - lastSent < 5000) return; // dedupe
+  if (key === lastKey && now - lastSent < 5000) return;
 
   keepConnected();
   if (!(await ensureConnected())) {
