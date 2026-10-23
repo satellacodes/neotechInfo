@@ -1,20 +1,30 @@
-name: Build Fimware (NAV)
+name: Build Firmware (NAV)
 
 on:
   push:
     branches: [main, master]
+    paths:
+      - "fimwareOnlyNAV/**"
+      - ".github/workflows/build-fimwareOnlyNAV.yml"
     tags: ["v*"]
   pull_request:
+    paths: ["fimwareOnlyNAV/**"]
   workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nav-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: fimwareOnlyNAV
-
     steps:
       - uses: actions/checkout@v4
 
@@ -24,8 +34,8 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.platformio
-          key: ${{ runner.os }}-pio-${{ hashFiles('fimwareOnlyNAV/platformio.ini') }}
-          restore-keys: ${{ runner.os }}-pio-
+          key: ${{ runner.os }}-pio-nav-${{ hashFiles('fimwareOnlyNAV/platformio.ini') }}
+          restore-keys: ${{ runner.os }}-pio-nav-
 
       - uses: actions/setup-python@v5
         with:
@@ -39,25 +49,39 @@ jobs:
       - name: Build
         run: pio run -e esp32dev
 
-      - name: Upload Fimware Artifact
+      - name: Collect binary
+        id: bin
+        run: |
+          mkdir -p dist
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="dev-${GITHUB_SHA::7}"
+          fi
+          NAME="GLPro-Neotech-NAV-${TAG}.bin"
+          cp .pio/build/esp32dev/firmware.bin "dist/${NAME}"   
+          echo "path=fimwareOnlyNAV/dist/${NAME}" >> "$GITHUB_OUTPUT"
+          ls -la dist/
+
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fimware-esp32dev
+          name: GLPro-Neotech-NAV
           path: |
-            fimwareOnlyNAV/.pio/build/esp32dev/fimware.bin
-            fimwareOnlyNAV/.pio/build/esp32dev/fimware.elf
+            ${{ steps.bin.outputs.path }}
+            fimwareOnlyNAV/.pio/build/esp32dev/firmware.elf
             fimwareOnlyNAV/.pio/build/esp32dev/bootloader.bin
             fimwareOnlyNAV/.pio/build/esp32dev/partitions.bin
           if-no-files-found: error
+          retention-days: 30
 
-      - name: Release on Tag
+      - name: Attach to Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            fimwareOnlyNAV/.pio/build/esp32dev/fimware.bin
+            ${{ steps.bin.outputs.path }}
             fimwareOnlyNAV/.pio/build/esp32dev/bootloader.bin
             fimwareOnlyNAV/.pio/build/esp32dev/partitions.bin
-          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
