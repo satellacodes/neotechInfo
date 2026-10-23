@@ -1,4 +1,4 @@
-name: Build Firmware (NAV)
+name: Build Fimware (NAV)
 
 on:
   push:
@@ -13,7 +13,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: firmwareOnlyNAV
+        working-directory: fimwareOnlyNAV
 
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +24,7 @@ jobs:
           path: |
             ~/.cache/pip
             ~/.platformio
-          key: ${{ runner.os }}-pio-${{ hashFiles('firmwareOnlyNAV/platformio.ini') }}
+          key: ${{ runner.os }}-pio-${{ hashFiles('fimwareOnlyNAV/platformio.ini') }}
           restore-keys: ${{ runner.os }}-pio-
 
       - uses: actions/setup-python@v5
@@ -39,15 +39,15 @@ jobs:
       - name: Build
         run: pio run -e esp32dev
 
-      - name: Upload Firmware Artifact
+      - name: Upload Fimware Artifact
         uses: actions/upload-artifact@v4
         with:
           name: firmware-esp32dev
           path: |
-            firmwareOnlyNAV/.pio/build/esp32dev/firmware.bin
-            firmwareOnlyNAV/.pio/build/esp32dev/firmware.elf
-            firmwareOnlyNAV/.pio/build/esp32dev/bootloader.bin
-            firmwareOnlyNAV/.pio/build/esp32dev/partitions.bin
+            fimwareOnlyNAV/.pio/build/esp32dev/fimware.bin
+            fimwareOnlyNAV/.pio/build/esp32dev/fimware.elf
+            fimwareOnlyNAV/.pio/build/esp32dev/bootloader.bin
+            fimwareOnlyNAV/.pio/build/esp32dev/partitions.bin
           if-no-files-found: error
 
       - name: Release on Tag
@@ -55,9 +55,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            firmwareOnlyNAV/.pio/build/esp32dev/firmware.bin
-            firmwareOnlyNAV/.pio/build/esp32dev/bootloader.bin
-            firmwareOnlyNAV/.pio/build/esp32dev/partitions.bin
+            fimwareOnlyNAV/.pio/build/esp32dev/fimware.bin
+            fimwareOnlyNAV/.pio/build/esp32dev/bootloader.bin
+            fimwareOnlyNAV/.pio/build/esp32dev/partitions.bin
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
