@@ -42,7 +42,7 @@ jobs:
       - name: Upload Fimware Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-esp32dev
+          name: fimware-esp32dev
           path: |
             fimwareOnlyNAV/.pio/build/esp32dev/fimware.bin
             fimwareOnlyNAV/.pio/build/esp32dev/fimware.elf
