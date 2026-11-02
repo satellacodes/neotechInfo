@@ -1,18 +1,3 @@
-/*
- * GL Pro Neotech Smart Display  v2.2
- * Fitur : tegangan aki realtime, jam mesin (jam:menit), navigasi BLE dari HP
- * Board : ESP32 Dev Module (Arduino core 2.x / 3.x)
- * OLED  : SSD1306 128x64 I2C (0.96")
- * Lib   : U8g2, NimBLE-Arduino 2.x, ArduinoJson 7
- *
- * Catatan kestabilan:
- *  - Callback BLE TIDAK menyentuh state display. Perintah dimasukkan ke queue,
- *    lalu diproses di loop() -> tidak ada race condition / crash.
- *  - Tidak memakai String Arduino untuk data nav (anti fragmentasi heap).
- *  - Advertising di-restart otomatis + watchdog advertising di loop.
- *  - Deteksi mesin pakai histeresis + debounce.
- *  - OLED di-init ulang berkala (jaga-jaga glitch listrik motor).
- */
 
 #include <Arduino.h>
 #include <math.h>
@@ -31,8 +16,8 @@
 
 // ============ KALIBRASI ============
 #define R1_KOHM     10.0f       // resistor atas (ke +12V)
-#define R2_KOHM     2.2f        // resistor bawah (ke GND)
-#define DIVIDER     ((R1_KOHM + R2_KOHM) / R2_KOHM)   // 5.545
+#define R2_KOHM     2.0f        // resistor bawah (ke GND): 5x 10k paralel = 2.0k (jika pakai 2.2k, ganti 2.2f)
+#define DIVIDER     ((R1_KOHM + R2_KOHM) / R2_KOHM)   // 6.0 (R2=2.0k) / 5.545 (R2=2.2k)
 #define VBAT_CAL    1.000f      // koreksi: isi = V_multimeter / V_display
 
 #define V_ENGINE_ON   13.2f     // >= ini (3 dtk) -> mesin hidup / charging
