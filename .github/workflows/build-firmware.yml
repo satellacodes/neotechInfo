@@ -32,8 +32,14 @@ jobs:
 
       - run: pip install platformio
 
-      - name: Compile
-        run: pio run -d fimware
+      - name: Compile (coba ulang bila registry PlatformIO gagal sesaat)
+        run: |
+          for i in 1 2 3 4; do
+            pio run -d fimware && exit 0
+            echo "Percobaan $i gagal, ulangi dalam 20 detik..."
+            sleep 20
+          done
+          exit 1
 
       - name: Collect binary
         id: bin
@@ -41,7 +47,14 @@ jobs:
           mkdir -p dist
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then TAG="${GITHUB_REF_NAME}"; else TAG="dev-${GITHUB_SHA::7}"; fi
           NAME="GLPro-Neotech-firmware-${TAG}.bin"
-          cp fimware/.pio/build/esp32dev/firmware.bin "dist/${NAME}"
+          B=fimware/.pio/build/esp32dev
+          PK=~/.platformio/packages
+          # satu file lengkap (bootloader + partisi + aplikasi): flash di alamat 0x0
+          python "$PK/tool-esptoolpy/esptool.py" --chip esp32 merge_bin -o "dist/${NAME}" \
+            --flash_mode dio --flash_freq 40m --flash_size 4MB \
+            0x1000 "$B/bootloader.bin" 0x8000 "$B/partitions.bin" \
+            0xe000 "$PK/framework-arduinoespressif32/tools/partitions/boot_app0.bin" \
+            0x10000 "$B/firmware.bin"
           echo "path=dist/${NAME}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v4
