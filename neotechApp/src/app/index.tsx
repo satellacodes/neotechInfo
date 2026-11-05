@@ -38,6 +38,7 @@ import {
   StatusPill,
   useToast,
 } from "../ui/components";
+import { AppSlider } from "../ui/slider";
 import { C, R, S, T } from "../ui/theme";
 
 const DEF_NAME = "Dimas";
@@ -70,6 +71,25 @@ const toLabel = (v: string) =>
     .replace(/[̀-ͯ]/g, "")
     .replace(/[^\x20-\x7e]/g, "")
     .replace(/\|/g, "/");
+
+/** profil beacon Find Hub saat parkir (harus sama dengan FIND_PROF di firmware) */
+const FIND_PROFILES = [
+  { name: "Ketat", desc: "Beacon 8 dtk tiap ±1 mnt · tambahan arus ±7 mA" },
+  { name: "Seimbang", desc: "Beacon 10 dtk tiap ±5 mnt · tambahan arus ±2 mA" },
+  { name: "Hemat", desc: "Beacon 10 dtk tiap ±15 mnt · tambahan arus ±0,6 mA" },
+] as const;
+const PARK_OPTIONS = [1, 3, 10] as const; // menit
+const BRIGHT_PRESETS = [
+  { name: "Redup", v: 25 },
+  { name: "Sedang", v: 60 },
+  { name: "Terang", v: 100 },
+] as const;
+const FW_ERRORS: Record<string, string> = {
+  pin: "PIN salah",
+  pinfmt: "PIN baru harus 4–8 digit angka",
+  key: "Kunci tidak valid (harus 40 karakter hex)",
+  nokey: "Pasang kunci dulu sebelum mengaktifkan",
+};
 
 function fmtEngine(sec: number | null) {
   if (sec == null) return null;
@@ -106,6 +126,19 @@ function Screen() {
   const [showDebug, setShowDebug] = useState(false);
   const [notifPerm, setNotifPerm] = useState("unknown");
 
+  // kecerahan layar
+  const [bright, setBright] = useState(100);
+  const brightDirty = useRef(false);
+  const lastBrightSend = useRef(0);
+
+  // pelacak Find Hub
+  const [pin, setPin] = useState("");
+  const [keyText, setKeyText] = useState("");
+  const [profSel, setProfSel] = useState(1);
+  const [findBusy, setFindBusy] = useState(false);
+  const [showFindHelp, setShowFindHelp] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+
   const connected = ble.link === "connected";
   const busy = ble.link === "scanning" || ble.link === "connecting";
   const hasData = ble.voltage != null;
@@ -134,6 +167,24 @@ function Screen() {
       setLine2(ble.idleLine2);
     }
   }, [ble.idleName, ble.idleLine2]);
+
+  // sinkronkan pengaturan yang tersimpan di ESP32 (sekali, selama user belum mengubahnya)
+  useEffect(() => {
+    if (!brightDirty.current && ble.bright != null) setBright(ble.bright);
+  }, [ble.bright]);
+  useEffect(() => {
+    if (ble.findProf != null) setProfSel(ble.findProf);
+  }, [ble.findProf]);
+  useEffect(() => {
+    const e = ble.fwError;
+    if (e) show(FW_ERRORS[e.code] ?? `Galat dari ESP32: ${e.code}`, "err");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ble.fwError?.at]);
+  useEffect(() => {
+    if (!confirmClear) return;
+    const t = setTimeout(() => setConfirmClear(false), 3500);
+    return () => clearTimeout(t);
+  }, [confirmClear]);
 
   const refreshPerm = useCallback(async () => {
     if (!NotifListener) return;
@@ -169,6 +220,75 @@ function Screen() {
   const changeMode = (m: number) => {
     setMode(m);
     send({ cmd: "mode", val: m });
+  };
+
+  // kecerahan: kirim pelan-pelan saat digeser (tanpa menyimpan), simpan ke flash saat dilepas
+  const onBrightDrag = (v: number) => {
+    brightDirty.current = true;
+    setBright(v);
+    const now = Date.now();
+    if (now - lastBrightSend.current >= 90) {
+      lastBrightSend.current = now;
+      void sendJson({ cmd: "bright", val: v });
+    }
+  };
+  const onBrightCommit = async (v: number) => {
+    setBright(v);
+    await send({ cmd: "bright", val: v, save: 1 }, "Kecerahan tersimpan ✓");
+    brightDirty.current = false;
+  };
+
+  const setParkMin = (i: number) =>
+    send({ cmd: "park", min: PARK_OPTIONS[i] }, "Waktu tidur diatur");
+
+  // ---- Find Hub ----
+  const cleanKey = keyText.replace(/[^0-9a-fA-F]/g, "");
+  const keyValid = cleanKey.length === 40;
+  const pinValid = /^\d{4,8}$/.test(pin);
+
+  const installKey = async () => {
+    if (!keyValid) return show("Kunci harus 40 karakter hex (0-9, a-f)", "err");
+    if (!pinValid)
+      return show(
+        ble.pinSet ? "Masukkan PIN pelacak" : "Buat PIN 4–8 digit angka",
+        "err",
+      );
+    setFindBusy(true);
+    const ok = await send(
+      { cmd: "find_key", key: cleanKey.toLowerCase(), pin },
+      "Kunci dipasang ✓ — sekarang aktifkan pelacak",
+    );
+    if (ok) setKeyText("");
+    setFindBusy(false);
+  };
+  const toggleFind = async (on: boolean) => {
+    if (!pinValid) return show("Masukkan PIN pelacak dulu", "err");
+    setFindBusy(true);
+    await send(
+      { cmd: "find", en: on ? 1 : 0, prof: profSel, pin },
+      on ? "Pelacak diaktifkan" : "Pelacak dimatikan",
+    );
+    setFindBusy(false);
+  };
+  const changeProfile = (i: number) => {
+    setProfSel(i);
+    if (ble.findKey && pinValid)
+      send(
+        { cmd: "find", en: ble.findOn ? 1 : 0, prof: i, pin },
+        "Profil diubah",
+      );
+    else if (ble.findKey)
+      show("Masukkan PIN agar profil tersimpan di ESP32", "info");
+  };
+  const clearFind = () => {
+    if (!pinValid) return show("Masukkan PIN pelacak dulu", "err");
+    if (!confirmClear) {
+      setConfirmClear(true);
+      show("Tekan sekali lagi untuk menghapus kunci", "info");
+      return;
+    }
+    setConfirmClear(false);
+    send({ cmd: "find_clear", pin }, "Kunci pelacak dihapus");
   };
 
   const writeIdle = async () => {
@@ -352,6 +472,42 @@ function Screen() {
           />
         </Card>
 
+        {/* KECERAHAN */}
+        <Card
+          title="Kecerahan layar"
+          index={2}
+          right={
+            <Text style={[T.small, { fontWeight: "700", color: C.accent }]}>
+              {bright}%
+            </Text>
+          }
+        >
+          <AppSlider
+            value={bright}
+            min={5}
+            max={100}
+            disabled={!connected}
+            onChange={onBrightDrag}
+            onCommit={onBrightCommit}
+          />
+          <View style={st.row}>
+            {BRIGHT_PRESETS.map((p) => (
+              <Button
+                key={p.name}
+                label={p.name}
+                variant={bright === p.v ? "primary" : "ghost"}
+                disabled={!connected}
+                onPress={() => onBrightCommit(p.v)}
+                style={{ flex: 1 }}
+              />
+            ))}
+          </View>
+          <Text style={T.small}>
+            Tersimpan di ESP32, jadi tetap berlaku setiap motor dinyalakan.
+            Layar lebih redup = lebih hemat daya dan nyaman di malam hari.
+          </Text>
+        </Card>
+
         {/* IDLE EDITOR */}
         <Card title="Teks layar idle" index={2}>
           <View style={st.oled}>
@@ -519,6 +675,142 @@ function Screen() {
             </Text>
           </Card>
         )}
+
+        {/* FIND HUB */}
+        <Card
+          title="Pelacak Find Hub"
+          index={5}
+          right={
+            <Text
+              style={[
+                T.small,
+                { fontWeight: "700", color: ble.findOn ? C.ok : C.sub },
+              ]}
+            >
+              {ble.findKey == null
+                ? "—"
+                : ble.findOn
+                  ? "AKTIF"
+                  : ble.findKey
+                    ? "MATI"
+                    : "BELUM ADA KUNCI"}
+            </Text>
+          }
+        >
+          <Text style={T.small}>
+            ESP32 memancarkan beacon BLE yang dikenali jaringan Find Hub. HP
+            Android di sekitar motor yang sedang lewat akan melaporkan lokasinya
+            (terenkripsi) ke akun Google Anda. Beacon hanya dipancarkan saat HP
+            Anda tidak terhubung ke display.
+          </Text>
+
+          <View>
+            <Text style={st.lbl}>
+              PIN pelacak {ble.pinSet === false ? "(buat baru, 4–8 angka)" : ""}
+            </Text>
+            <TextInput
+              style={st.input}
+              value={pin}
+              onChangeText={(v) => setPin(v.replace(/\D/g, "").slice(0, 8))}
+              keyboardType="number-pad"
+              secureTextEntry
+              placeholder="••••"
+              placeholderTextColor={C.sub}
+            />
+          </View>
+
+          <View style={st.between}>
+            <Text style={T.body}>Aktifkan pelacak</Text>
+            <Switch
+              value={!!ble.findOn}
+              disabled={!connected || findBusy || !ble.findKey}
+              onValueChange={toggleFind}
+              trackColor={{ true: C.accentDim, false: C.surface2 }}
+              thumbColor={ble.findOn ? C.accent : C.sub}
+            />
+          </View>
+
+          <View>
+            <Text style={st.lbl}>
+              Seberapa sering beacon dipancarkan saat parkir
+            </Text>
+            <Segmented
+              options={FIND_PROFILES.map((p) => p.name)}
+              value={profSel}
+              onChange={changeProfile}
+            />
+            <Text style={[T.small, { marginTop: S.sm }]}>
+              {FIND_PROFILES[profSel].desc}
+            </Text>
+          </View>
+
+          <View>
+            <Text style={st.lbl}>Kunci (advertisement key, 40 hex)</Text>
+            <TextInput
+              style={st.input}
+              value={keyText}
+              onChangeText={setKeyText}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder={
+                ble.findKey
+                  ? "Kunci sudah terpasang — tempel untuk mengganti"
+                  : "tempel dari skrip main.py"
+              }
+              placeholderTextColor={C.sub}
+            />
+            <Text style={st.count}>{cleanKey.length}/40</Text>
+          </View>
+          <View style={st.row}>
+            <Button
+              label={confirmClear ? "Yakin? Tekan lagi" : "Hapus kunci"}
+              variant="danger"
+              disabled={!connected || !ble.findKey}
+              onPress={clearFind}
+              style={{ flex: 1 }}
+            />
+            <Button
+              label="Pasang kunci"
+              loading={findBusy}
+              disabled={!connected || !keyValid}
+              onPress={installKey}
+              style={{ flex: 2 }}
+            />
+          </View>
+
+          <PressableScale
+            onPress={() => setShowFindHelp((v) => !v)}
+            style={st.link}
+          >
+            <Text style={st.linkTxt}>
+              {showFindHelp ? "Tutup panduan" : "Cara mendapatkan kunci"}
+            </Text>
+          </PressableScale>
+          <Collapsible open={showFindHelp}>
+            <Text style={st.mono}>
+              {`1. Di laptop: pasang Python + Chrome terbaru, lalu jalankan skrip main.py dari proyek GoogleFindMyTools.\n2. Login Google saat Chrome terbuka, tekan "r" (register tracker), salin advertisement key (40 karakter hex).\n3. Tempel di kolom kunci, isi PIN, tekan "Pasang kunci", lalu nyalakan saklar.\n4. Ulangi main.py secara berkala agar pendaftaran tidak kedaluwarsa. Lokasi dilihat lewat skrip itu.\n\nEksperimental & tidak resmi dari Google — lihat docs/find-hub.md.`}
+            </Text>
+          </Collapsible>
+        </Card>
+
+        {/* HEMAT DAYA */}
+        <Card title="Hemat daya" index={6}>
+          <Text style={st.lbl}>Display tidur setelah mesin mati</Text>
+          <Segmented
+            options={PARK_OPTIONS.map((m) => `${m} mnt`)}
+            value={Math.max(
+              0,
+              PARK_OPTIONS.indexOf((ble.parkMin ?? 3) as 1 | 3 | 10),
+            )}
+            onChange={setParkMin}
+          />
+          <Text style={T.small}>
+            Saat tidur, layar mati dan koneksi app terputus; ESP32 bangun tiap
+            ±10 detik untuk memeriksa mesin. Nyalakan mesin (atau tekan tombol
+            BOOT) untuk membangunkannya. Pelacak Find Hub tetap bekerja selama
+            tegangan aki di atas 11,8 V.
+          </Text>
+        </Card>
 
         {/* MANUAL */}
         <Card title="Tes navigasi manual" index={5}>

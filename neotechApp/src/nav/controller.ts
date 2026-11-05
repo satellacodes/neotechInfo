@@ -1,11 +1,10 @@
+/**
+ * Penghubung: notifikasi Google Maps -> parser -> BLE -> ESP32.
+ * Dipakai oleh headless task (dan bisa dibaca UI untuk debug).
+ */
 import { useSyncExternalStore } from "react";
 import { ensureConnected, keepConnected, sendJson } from "../ble/ble";
-import {
-  MAPS_PKG,
-  NavInfo,
-  parseMapsNotification,
-  RawNotification,
-} from "./parser";
+import { MAPS_PKG, NavInfo, parseMapsNotification, RawNotification } from "./parser";
 
 export interface NavDebug {
   enabled: boolean;
@@ -13,9 +12,12 @@ export interface NavDebug {
   lastInfo: NavInfo | null;
   lastSentAt: number;
   count: number;
+  /** semua notifikasi (app mana pun) yang sampai ke listener */
   totalSeen: number;
   lastApp: string;
+  /** nama field JSON dari library (jika bukan app,title,text... berarti di-obfuscate) */
   lastKeys: string;
+  /** hasil terakhir: ok | parse-gagal | dikirim | ble-gagal | nonaktif */
   lastResult: string;
 }
 
@@ -42,11 +44,7 @@ function subscribe(l: () => void) {
   };
 }
 export function useNavDebug(): NavDebug {
-  return useSyncExternalStore(
-    subscribe,
-    () => state,
-    () => state,
-  );
+  return useSyncExternalStore(subscribe, () => state, () => state);
 }
 export function setAutoNav(on: boolean) {
   set({ enabled: on });
@@ -79,7 +77,7 @@ export async function handleNotification(raw: RawNotification) {
 
   const key = JSON.stringify(info);
   const now = Date.now();
-  if (key === lastKey && now - lastSent < 5000) return;
+  if (key === lastKey && now - lastSent < 5000) return; // dedupe
 
   keepConnected();
   if (!(await ensureConnected())) {

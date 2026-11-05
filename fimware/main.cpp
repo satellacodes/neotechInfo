@@ -8,11 +8,14 @@
 #include <ArduinoJson.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#include <esp_sleep.h>
+#include <driver/rtc_io.h>
 
 // ============ PIN ============
 #define PIN_SDA     21
 #define PIN_SCL     22
 #define PIN_VBAT    34          // ADC1_CH6 (aman dipakai bersama BLE)
+#define PIN_BOOT    0           // tombol BOOT bawaan board: bangunkan dari tidur / tahan 8 dtk = reset pelacak
 
 // ============ KALIBRASI ============
 #define R1_KOHM     10.0f       // resistor atas (ke +12V)
@@ -20,11 +23,30 @@
 #define DIVIDER     ((R1_KOHM + R2_KOHM) / R2_KOHM)   // 6.0 (R2=2.0k) / 5.545 (R2=2.2k)
 #define VBAT_CAL    1.000f      // koreksi: isi = V_multimeter / V_display
 
-#define V_ENGINE_ON   13.2f     // >= ini (3 dtk) -> mesin hidup / charging
-#define V_ENGINE_OFF  12.9f     // <= ini (3 dtk) -> mesin mati
+#define V_ENGINE_ON   13.1f     // >= ini (3 dtk) -> mesin hidup / charging
+#define V_ENGINE_OFF  12.7f     // <= ini (3 dtk) -> mesin mati
 #define ENGINE_DEBOUNCE_MS 3000
 
 #define NAV_STALE_MS  120000UL  // nav otomatis tanpa update > 2 mnt -> "menunggu rute"
+
+// ============ HEMAT DAYA / PARKIR ============
+// Sistem dicatu terus dari aki (bukan kabel kontak). Setelah mesin mati dan tidak ada aktivitas
+// selama `parkMin` menit, ESP32 tidur dalam (OLED dimatikan). Tiap PARK_WAKE_S detik ia bangun
+// sebentar: cek tegangan (mesin menyala? aki lemah?) dan, bila jadwalnya tiba, memancarkan beacon Find Hub.
+#define PARK_WAKE_S         10        // jeda bangun saat parkir (menentukan seberapa cepat display muncul setelah mesin hidup)
+#define PARK_LOWBAT_WAKE_S  60        // aki lemah: bangun lebih jarang, tanpa beacon
+#define V_WAKE_RUN          13.0f     // >= ini saat bangun = mesin hidup/charging -> boot normal
+#define V_CUTOFF            11.8f     // < ini saat parkir -> hentikan beacon (selamatkan aki untuk starter)
+#define V_RESUME            12.5f     // >= ini -> beacon aktif lagi
+#define DEF_PARK_MIN        3
+
+// ============ FIND HUB (FMDN) ============
+// Mengikuti firmware referensi GoogleFindMyTools: frame service-data 0xFEAA, tipe 0x41, 20 byte
+// "advertisement key" hasil registrasi lewat skrip Python (bukan jalur resmi Fast Pair Google).
+#define FMDN_FRAME_TYPE     0x41
+#define FIND_SLOT_MS        400UL     // saat nyala & mesin hidup: 400 ms beacon ...
+#define APP_SLOT_MS         1600UL    // ... diselingi 1600 ms iklan untuk app (siklus 2 dtk)
+#define FIND_TX_DBM         9
 
 // ============ BLE ============
 #define DEVICE_NAME "GLPro-Neotech"
@@ -46,7 +68,7 @@ Preferences prefs;
 
 // ============ STATE ============
 int           displayMode    = 0;      // 0=V, 1=waktu, 2=nav
-bool          idleDisplay    = true;   // true = sapaan "Hai Dimas"
+bool          idleDisplay    = true;   // true = greeting
 float         batteryVoltage = 0.0f;
 float         vbatFiltered   = 0.0f;
 bool          engineRunning  = false;
@@ -62,6 +84,27 @@ unsigned long lastNotify     = 0;
 unsigned long lastDispInit   = 0;
 unsigned long lastAdvCheck   = 0;
 uint8_t       contrastVal    = 255;
+uint8_t       brightPct      = 100;    // kecerahan 5..100 % (dari app, tersimpan di flash)
+uint8_t       savedBright    = 100;
+
+// pelacak Find Hub + hemat daya
+bool          fhnEnabled     = false;
+bool          fhnKeySet      = false;
+uint8_t       fhnKey[20]     = {0};
+uint8_t       fhnProfile     = 1;      // 0 ketat, 1 seimbang, 2 hemat
+uint8_t       parkMin        = DEF_PARK_MIN;
+char          pinStr[10]     = "";     // PIN pengubah pengaturan pelacak ("" = belum diatur)
+const char*   errCode        = nullptr;
+bool          forceStatus    = false;
+unsigned long lastKeepAwake  = 0;
+unsigned long advSwitchAt    = 0;
+unsigned long lastAdvKick    = 0;
+enum AdvMode : uint8_t { ADV_NONE, ADV_APP, ADV_FIND };
+AdvMode       advMode        = ADV_NONE;
+
+// bertahan selama deep sleep
+RTC_DATA_ATTR uint16_t rtcCycles  = 0;
+RTC_DATA_ATTR uint8_t  rtcLowBatt = 0;
 
 // splash saat pertama dialiri daya, lalu layar idle
 #define BOOT_MS 2600UL
@@ -293,6 +336,7 @@ void drawIdle(unsigned long now) {
   int bx = 126 - vw - 8;
   if (bleConnected) u8g2.drawDisc(bx, 5, 2);     // BT tersambung = bulat penuh
   else              u8g2.drawCircle(bx, 5, 2);   // belum = bulat kosong
+  if (fhnEnabled && fhnKeySet) u8g2.drawStr(77, 8, "FH");   // pelacak Find Hub aktif
   u8g2.drawHLine(0, 11, 128);
 
   // sapaan
@@ -545,6 +589,205 @@ void drawNav() {
   u8g2.sendBuffer();
 }
 
+// ============ KECERAHAN ============
+uint8_t pctToContrast(uint8_t p) {
+  p = constrain(p, 5, 100);
+  float c = powf(p / 100.0f, 1.6f) * 255.0f;      // kurva gamma: slider terasa merata di mata
+  return (uint8_t)constrain((int)c, 6, 255);
+}
+void applyBrightness() {
+  contrastVal = pctToContrast(brightPct);
+  u8g2.setContrast(contrastVal);
+}
+
+// ============ FIND HUB (FMDN) ============
+struct FindProfile { uint16_t everyCycles; uint16_t windowMs; };
+// everyCycles dihitung dalam siklus bangun PARK_WAKE_S detik
+static const FindProfile FIND_PROF[3] = {
+  {6,  8000},     // 0 Ketat    : jendela 8 dtk tiap ~60 dtk
+  {30, 10000},    // 1 Seimbang : jendela 10 dtk tiap ~5 mnt
+  {90, 10000},    // 2 Hemat    : jendela 10 dtk tiap ~15 mnt
+};
+
+static int hexv(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+// 40 karakter hex -> 20 byte. Tolak semua-nol / semua-FF (kunci placeholder).
+bool parseHexKey(const char* s, uint8_t* out) {
+  if (!s || strlen(s) != 40) return false;
+  uint8_t orv = 0, andv = 0xFF;
+  for (int i = 0; i < 20; i++) {
+    int hi = hexv(s[2 * i]), lo = hexv(s[2 * i + 1]);
+    if (hi < 0 || lo < 0) return false;
+    out[i] = (uint8_t)((hi << 4) | lo);
+    orv |= out[i];
+    andv &= out[i];
+  }
+  return orv != 0 && andv != 0xFF;
+}
+
+// iklan untuk app (connectable, UUID layanan + nama di scan response)
+void setAppAdv() {
+  NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
+  adv->stop();
+  NimBLEAdvertisementData advData;
+  advData.setFlags(BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP);
+  advData.addServiceUUID(SVC_UUID);          // 128-bit UUID di paket utama (untuk filter scan HP)
+  NimBLEAdvertisementData scanData;
+  scanData.setName(DEVICE_NAME);             // nama di scan response
+  adv->setConnectableMode(BLE_GAP_CONN_MODE_UND);
+  adv->setDiscoverableMode(BLE_GAP_DISC_MODE_GEN);
+  adv->enableScanResponse(true);
+  adv->setMinInterval(48);                   // 30 ms
+  adv->setMaxInterval(80);                   // 50 ms
+  adv->setAdvertisementData(advData);
+  adv->setScanResponseData(scanData);
+  adv->start();
+  advMode = ADV_APP;
+}
+
+// beacon Find Hub: non-connectable, service data 0xFEAA = [tipe][20 byte kunci][flags=0]
+void setFindAdv() {
+  NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
+  adv->stop();
+  uint8_t sd[22];
+  sd[0] = FMDN_FRAME_TYPE;
+  memcpy(sd + 1, fhnKey, 20);
+  sd[21] = 0x00;
+  NimBLEAdvertisementData d;
+  d.setFlags(BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP);
+  d.setServiceData(NimBLEUUID((uint16_t)0xFEAA), sd, sizeof(sd));
+  adv->setConnectableMode(BLE_GAP_CONN_MODE_NON);
+  adv->setDiscoverableMode(BLE_GAP_DISC_MODE_GEN);
+  adv->enableScanResponse(false);
+  adv->setMinInterval(64);                   // 40 ms
+  adv->setMaxInterval(64);
+  adv->setAdvertisementData(d);
+  adv->start();
+  advMode = ADV_FIND;
+}
+
+// Penjadwal iklan saat bangun: app terhubung -> tidak ada beacon (pemilik ada di dekat motor);
+// tidak terhubung & pelacak aktif -> selang-seling 400 ms beacon / 1600 ms iklan app.
+void advTick(unsigned long now) {
+  if (bleConnected) { advMode = ADV_APP; return; }
+  NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
+  bool find = fhnEnabled && fhnKeySet;
+  if (!find) {
+    if ((advMode != ADV_APP || !adv->isAdvertising()) && now - lastAdvKick >= 1000) {
+      lastAdvKick = now;
+      setAppAdv();
+    }
+    return;
+  }
+  if (advMode == ADV_APP && !adv->isAdvertising() && now - lastAdvKick >= 500) {
+    lastAdvKick = now;                       // baru putus dari app: nyalakan lagi
+    setAppAdv();
+    advSwitchAt = now + APP_SLOT_MS;
+    return;
+  }
+  if (now < advSwitchAt) return;
+  if (advMode == ADV_FIND) { setAppAdv(); advSwitchAt = now + APP_SLOT_MS; }
+  else                     { setFindAdv(); advSwitchAt = now + FIND_SLOT_MS; }
+}
+
+void wipeTracker() {
+  fhnEnabled = false;
+  fhnKeySet  = false;
+  memset(fhnKey, 0, sizeof(fhnKey));
+  pinStr[0] = 0;
+  prefs.remove("fhn_key");
+  prefs.remove("fhn_en");
+  prefs.remove("pin");
+}
+
+// Pintu PIN untuk perintah pelacak. allowSet=true: jika PIN belum ada, 4-8 digit di "pin" menjadi PIN baru.
+bool pinGate(JsonDocument& doc, bool allowSet) {
+  const char* given = doc["pin"] | "";
+  if (pinStr[0]) {
+    if (!strcmp(given, pinStr)) return true;
+    errCode = "pin";
+    return false;
+  }
+  if (!allowSet) return true;
+  size_t n = strlen(given);
+  bool digits = n >= 4 && n <= 8;
+  for (size_t i = 0; digits && i < n; i++) digits = given[i] >= '0' && given[i] <= '9';
+  if (!digits) { errCode = "pinfmt"; return false; }
+  strcpy(pinStr, given);
+  prefs.putString("pin", pinStr);
+  return true;
+}
+
+// ============ TIDUR / PARKIR ============
+void goSleep(uint32_t sec) {
+  esp_sleep_enable_timer_wakeup((uint64_t)sec * 1000000ULL);
+  rtc_gpio_pullup_en((gpio_num_t)PIN_BOOT);
+  rtc_gpio_pulldown_dis((gpio_num_t)PIN_BOOT);
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_BOOT, 0);   // tombol BOOT membangunkan
+  esp_deep_sleep_start();
+  while (true) {}
+}
+
+// Jendela beacon saat parkir: hidupkan BLE, pancarkan frame Find Hub, matikan lagi.
+void runBeaconWindow(uint32_t ms) {
+  NimBLEDevice::init("");
+  NimBLEDevice::setPower(FIND_TX_DBM);
+  setFindAdv();
+  delay(ms);
+  NimBLEDevice::getAdvertising()->stop();
+  NimBLEDevice::deinit(true);
+}
+
+// Dipanggil di awal setup() saat bangun karena timer. Kembali hanya jika mesin menyala (boot normal).
+void parkedWake() {
+  setCpuFrequencyMhz(80);                    // cukup untuk BLE, hemat arus
+  analogSetAttenuation(ADC_11db);
+  analogReadResolution(12);
+  float v = readVoltageRaw();
+  if (v >= V_WAKE_RUN) return;               // mesin hidup / charging
+
+  Preferences p;
+  p.begin("glpro", true);
+  bool en       = p.getBool("fhn_en", false);
+  uint8_t prof  = p.getUChar("fhn_prof", 1);
+  bool keyOk    = p.getBytes("fhn_key", fhnKey, 20) == 20;
+  p.end();
+  if (prof > 2) prof = 1;
+
+  if (rtcLowBatt) { if (v >= V_RESUME) rtcLowBatt = 0; }
+  else if (v < V_CUTOFF) rtcLowBatt = 1;
+
+  if (rtcLowBatt) goSleep(PARK_LOWBAT_WAKE_S);   // aki lemah: tanpa beacon
+
+  if (en && keyOk) {
+    if (++rtcCycles >= FIND_PROF[prof].everyCycles) {
+      rtcCycles = 0;
+      runBeaconWindow(FIND_PROF[prof].windowMs);
+    }
+  }
+  goSleep(PARK_WAKE_S);
+}
+
+// Masuk mode parkir dari mode normal: simpan jam mesin, matikan OLED & BLE, tidur.
+void enterPark() {
+  if (totalEngineSec != lastSavedSec) {
+    prefs.putULong("engsec", totalEngineSec);
+    lastSavedSec = totalEngineSec;
+  }
+  u8g2.setPowerSave(1);                      // SSD1306 display OFF (arus ~µA)
+  NimBLEAdvertising* a = NimBLEDevice::getAdvertising();
+  if (a) a->stop();
+  NimBLEDevice::deinit(true);
+  rtcCycles  = 60000;                        // jendela beacon pertama langsung di bangun berikutnya
+  rtcLowBatt = (batteryVoltage < V_CUTOFF) ? 1 : 0;
+  prefs.end();
+  goSleep(rtcLowBatt ? PARK_LOWBAT_WAKE_S : PARK_WAKE_S);
+}
+
 // ============ COMMAND HANDLER (dipanggil dari loop) ============
 void handleCommand(const char* js) {
   JsonDocument doc;
@@ -553,6 +796,8 @@ void handleCommand(const char* js) {
     return;
   }
   const char* cmd = doc["cmd"] | "";
+  // perintah dari pengguna = aktivitas (menunda tidur); aliran otomatis speed/nav/ping tidak dihitung
+  if (strcmp(cmd, "speed") && strcmp(cmd, "nav") && strcmp(cmd, "ping")) lastKeepAwake = millis();
 
   if (!strcmp(cmd, "mode")) {
     displayMode = constrain((int)(doc["val"] | 0), 0, 2);
@@ -604,6 +849,47 @@ void handleCommand(const char* js) {
     contrastVal = constrain((int)(doc["val"] | 255), 0, 255);
     u8g2.setContrast(contrastVal);
   }
+  else if (!strcmp(cmd, "bright")) {
+    brightPct = (uint8_t)constrain((int)(doc["val"] | 100), 5, 100);
+    applyBrightness();
+    if ((int)(doc["save"] | 0) == 1 && brightPct != savedBright) {   // simpan hanya saat slider dilepas
+      prefs.putUChar("bright", brightPct);
+      savedBright = brightPct;
+    }
+    forceStatus = true;
+  }
+  else if (!strcmp(cmd, "park")) {
+    parkMin = (uint8_t)constrain((int)(doc["min"] | DEF_PARK_MIN), 1, 30);
+    prefs.putUChar("parkmin", parkMin);
+    forceStatus = true;
+  }
+  else if (!strcmp(cmd, "find_key")) {
+    if (!pinGate(doc, true)) return;
+    uint8_t k[20];
+    if (!parseHexKey(doc["key"] | "", k)) { errCode = "key"; return; }
+    memcpy(fhnKey, k, 20);
+    fhnKeySet = true;
+    prefs.putBytes("fhn_key", fhnKey, 20);
+    forceStatus = true;
+  }
+  else if (!strcmp(cmd, "find")) {
+    if (!pinGate(doc, false)) return;
+    bool en = (int)(doc["en"] | 0) == 1;
+    if (en && !fhnKeySet) { errCode = "nokey"; return; }
+    fhnEnabled = en;
+    if (doc["prof"].is<int>()) {
+      fhnProfile = (uint8_t)constrain((int)doc["prof"], 0, 2);
+      prefs.putUChar("fhn_prof", fhnProfile);
+    }
+    prefs.putBool("fhn_en", fhnEnabled);
+    advSwitchAt = 0;                           // terapkan jadwal iklan baru segera
+    forceStatus = true;
+  }
+  else if (!strcmp(cmd, "find_clear")) {
+    if (!pinGate(doc, false)) return;
+    wipeTracker();
+    forceStatus = true;
+  }
   else if (!strcmp(cmd, "reset_time")) {
     totalEngineSec = 0;
     sessionSec = 0;
@@ -633,9 +919,19 @@ void notifyTelemetry(unsigned long now) {
   lastNotify = now;
   char buf[72];
   int n;
-  if (forceInfo || ++infoTick >= 5) {            // tiap ~5 dtk: kirim teks idle ("I|nama|baris2")
-    infoTick  = 0;
+  if (errCode) {                                 // galat perintah (PIN salah, kunci tidak valid, ...)
+    n = snprintf(buf, sizeof(buf), "E|%s", errCode);
+    errCode = nullptr;
+  } else if (forceInfo) {
     forceInfo = false;
+    n = snprintf(buf, sizeof(buf), "I|%s|%s", idleName, idleLine2);
+  } else if (forceStatus || infoTick == 2) {     // status pengaturan: S|kecerahan|find|profil|kunci|tidur|pin
+    forceStatus = false;
+    n = snprintf(buf, sizeof(buf), "S|%u|%d|%u|%d|%u|%d", brightPct, fhnEnabled ? 1 : 0,
+                 fhnProfile, fhnKeySet ? 1 : 0, parkMin, pinStr[0] ? 1 : 0);
+    infoTick++;
+  } else if (++infoTick >= 5) {                  // tiap ~5 dtk: kirim teks idle ("I|nama|baris2")
+    infoTick = 0;
     n = snprintf(buf, sizeof(buf), "I|%s|%s", idleName, idleLine2);
   } else {                                       // selain itu: telemetri CSV
     n = snprintf(buf, sizeof(buf), "%.2f,%d,%lu",
@@ -645,43 +941,45 @@ void notifyTelemetry(unsigned long now) {
   pTxChar->notify();
 }
 
-// ============ ADVERTISING ============
-void setupAdvertising() {
-  NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
-
-  NimBLEAdvertisementData advData;
-  advData.setFlags(BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP);
-  advData.addServiceUUID(SVC_UUID);          // 128-bit UUID di paket utama (untuk filter scan HP)
-
-  NimBLEAdvertisementData scanData;
-  scanData.setName(DEVICE_NAME);             // nama di scan response
-
-  adv->setAdvertisementData(advData);
-  adv->setScanResponseData(scanData);
-  adv->start();
-}
-
 // ============ SETUP ============
 void setup() {
+  // bangun dari timer = siklus parkir: cek tegangan / beacon lalu tidur lagi (kembali hanya jika mesin hidup)
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER) parkedWake();
+
   Serial.begin(115200);
   delay(100);
   setCpuFrequencyMhz(160);                   // lebih adem di dalam box motor
 
   analogSetAttenuation(ADC_11db);
   analogReadResolution(12);
+  pinMode(PIN_BOOT, INPUT_PULLUP);
 
   memset(&nav, 0, sizeof(nav));
+
+  prefs.begin("glpro", false);
+  totalEngineSec = prefs.getULong("engsec", 0);
+  lastSavedSec   = totalEngineSec;
+  brightPct   = (uint8_t)constrain((int)prefs.getUChar("bright", 100), 5, 100);
+  savedBright = brightPct;
+  parkMin     = (uint8_t)constrain((int)prefs.getUChar("parkmin", DEF_PARK_MIN), 1, 30);
+  fhnEnabled  = prefs.getBool("fhn_en", false);
+  fhnProfile  = prefs.getUChar("fhn_prof", 1);
+  if (fhnProfile > 2) fhnProfile = 1;
+  fhnKeySet   = prefs.getBytes("fhn_key", fhnKey, 20) == 20;
+  if (!fhnKeySet) fhnEnabled = false;
+  {
+    String pn = prefs.getString("pin", "");
+    strncpy(pinStr, pn.c_str(), sizeof(pinStr) - 1);
+    pinStr[sizeof(pinStr) - 1] = 0;
+  }
 
   Wire.begin(PIN_SDA, PIN_SCL);
   Wire.setClock(400000);
   Wire.setTimeOut(50);                       // jangan hang jika I2C error
   u8g2.begin();
   u8g2.setBusClock(400000);
-  u8g2.setContrast(contrastVal);
-
-  prefs.begin("glpro", false);
-  totalEngineSec = prefs.getULong("engsec", 0);
-  lastSavedSec   = totalEngineSec;
+  u8g2.setPowerSave(0);                      // bisa saja masih mode tidur setelah parkir
+  applyBrightness();
 
   {
     String n  = prefs.getString("name", DEF_NAME);
@@ -701,11 +999,11 @@ void setup() {
   // BLE
   NimBLEDevice::init(DEVICE_NAME);
   NimBLEDevice::setMTU(247);
-  NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+  NimBLEDevice::setPower(FIND_TX_DBM);
 
   pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(new SrvCb());
-  pServer->advertiseOnDisconnect(true);
+  pServer->advertiseOnDisconnect(false);     // iklan diatur advTick() (selang-seling dengan beacon Find Hub)
 
   NimBLEService* svc = pServer->createService(SVC_UUID);
 
@@ -716,9 +1014,11 @@ void setup() {
   pTxChar = svc->createCharacteristic(TX_UUID, NIMBLE_PROPERTY::NOTIFY);
 
   svc->start();
-  setupAdvertising();
+  setAppAdv();
+  advSwitchAt = millis() + APP_SLOT_MS;
 
   lastDispInit = millis();
+  lastKeepAwake = millis();
   Serial.println("[BOOT] ready");
 }
 
@@ -737,12 +1037,34 @@ void loop() {
   if (!bleConnected) speedActive = false;        // HP putus -> kembali ke layout tanpa speed
   notifyTelemetry(now);
 
-  // watchdog advertising: pastikan selalu bisa ditemukan HP saat tidak terhubung
-  if (now - lastAdvCheck >= 5000) {
-    lastAdvCheck = now;
-    NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
-    if (!bleConnected && !adv->isAdvertising()) adv->start();
+  // iklan: selalu bisa ditemukan HP saat tidak terhubung + jadwal beacon Find Hub
+  advTick(now);
+
+  // tombol BOOT: menahan = aktivitas; tahan 8 detik = hapus kunci + PIN pelacak
+  static unsigned long btnSince = 0;
+  static bool btnWiped = false;
+  if (digitalRead(PIN_BOOT) == LOW) {
+    lastKeepAwake = now;
+    if (!btnSince) btnSince = now;
+    if (!btnWiped && now - btnSince >= 8000) {
+      btnWiped = true;
+      wipeTracker();
+      forceStatus = true;
+      u8g2.clearBuffer();
+      u8g2.setFont(u8g2_font_helvB10_tr);
+      drawCentered("TRACKER RESET", 36);
+      u8g2.sendBuffer();
+      delay(1500);
+    }
+  } else {
+    btnSince = 0;
+    btnWiped = false;
   }
+
+  // parkir: mesin mati (dan tidak sedang di-charge) + tidak ada aktivitas -> tidur dalam
+  bool boot0 = (now - bootStart) < BOOT_MS;
+  if (engineRunning || batteryVoltage >= V_WAKE_RUN) lastKeepAwake = now;
+  if (!boot0 && now - lastKeepAwake >= (unsigned long)parkMin * 60000UL) enterPark();
 
   // re-init OLED tiap 30 dtk (pulih dari glitch tegangan/EMI)
   if (now - lastDispInit >= 30000) {

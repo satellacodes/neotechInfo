@@ -26,6 +26,13 @@ export interface BleSnapshot {
   engineSec: number | null;
   idleName: string | null;
   idleLine2: string | null;
+  bright: number | null;
+  findOn: boolean | null;
+  findProf: number | null;
+  findKey: boolean | null;
+  parkMin: number | null;
+  pinSet: boolean | null;
+  fwError: { code: string; at: number } | null;
 }
 
 let snap: BleSnapshot = {
@@ -36,6 +43,13 @@ let snap: BleSnapshot = {
   engineSec: null,
   idleName: null,
   idleLine2: null,
+  bright: null,
+  findOn: null,
+  findProf: null,
+  findKey: null,
+  parkMin: null,
+  pinSet: null,
+  fwError: null,
 };
 const listeners = new Set<() => void>();
 function setSnap(p: Partial<BleSnapshot>) {
@@ -53,6 +67,7 @@ export function useBle(): BleSnapshot {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
+// ---------- manager ----------
 let manager: BleManager | null = null;
 function mgr(): BleManager {
   if (!manager) manager = new BleManager();
@@ -137,6 +152,24 @@ function parseTelemetry(b64: string | null | undefined) {
       setSnap({ idleName: q[1], idleLine2: q.slice(2).join("|") });
     return;
   }
+  if (txt.startsWith("S|")) {
+    const q = txt.split("|");
+    if (q.length >= 7) {
+      setSnap({
+        bright: parseInt(q[1], 10),
+        findOn: q[2] === "1",
+        findProf: parseInt(q[3], 10),
+        findKey: q[4] === "1",
+        parkMin: parseInt(q[5], 10),
+        pinSet: q[6] === "1",
+      });
+    }
+    return;
+  }
+  if (txt.startsWith("E|")) {
+    setSnap({ fwError: { code: txt.slice(2), at: Date.now() } });
+    return;
+  }
   const p = txt.split(",");
   if (p.length < 3) return;
   const v = parseFloat(p[0]);
@@ -184,6 +217,12 @@ async function connectOnce(): Promise<boolean> {
       engineSec: null,
       idleName: null,
       idleLine2: null,
+      bright: null,
+      findOn: null,
+      findProf: null,
+      findKey: null,
+      parkMin: null,
+      pinSet: null,
     });
     if (wantConnected) scheduleRetry();
   });
@@ -220,7 +259,7 @@ function scheduleRetry() {
     if (!wantConnected) return;
     const ok = await ensureConnected();
     if (!ok && wantConnected) {
-      retryDelay = Math.min(retryDelay * 2, 10000);
+      retryDelay = Math.min(retryDelay * 2, 30000);
       scheduleRetry();
     }
   }, retryDelay);

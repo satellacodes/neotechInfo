@@ -1,3 +1,14 @@
+/**
+ * Kecepatan GPS realtime -> ESP32.
+ *
+ * Kenapa expo-location (bukan react-native-geolocation-service / @react-native-community/geolocation)?
+ * Saat Google Maps di layar depan, app ini ada di background. Android 10+ menghentikan update lokasi untuk
+ * app background KECUALI ada foreground service bertipe location. expo-location menyediakannya
+ * (opsi `foregroundService`) lewat config plugin; dua library lain tidak punya foreground service.
+ *
+ * Task didefinisikan di level modul dan di-import dari headless.ts (entry point) supaya terdaftar
+ * sebelum Android menjalankannya, termasuk saat app di-restart oleh sistem.
+ */
 import * as Location from "expo-location";
 import * as TaskManager from "expo-task-manager";
 import { useSyncExternalStore } from "react";
@@ -14,12 +25,7 @@ export interface SpeedState {
   error: string | null;
 }
 
-let state: SpeedState = {
-  running: false,
-  kmh: null,
-  accuracy: null,
-  error: null,
-};
+let state: SpeedState = { running: false, kmh: null, accuracy: null, error: null };
 const listeners = new Set<() => void>();
 function set(p: Partial<SpeedState>) {
   state = { ...state, ...p };
@@ -32,28 +38,25 @@ function subscribe(l: () => void) {
   };
 }
 export function useSpeed(): SpeedState {
-  return useSyncExternalStore(
-    subscribe,
-    () => state,
-    () => state,
-  );
+  return useSyncExternalStore(subscribe, () => state, () => state);
 }
 
+// ---------- pengolahan sampel GPS ----------
 let smooth: number | null = null;
 let lastSent = -1;
 let lastSentAt = 0;
 
-const MAX_ACCURACY_M = 60;
-const STANDSTILL_KMH = 3;
+const MAX_ACCURACY_M = 60; // abaikan sampel dengan akurasi lebih buruk dari ini
+const STANDSTILL_KMH = 3; // di bawah ini dianggap berhenti (hilangkan jitter GPS)
 
 function onLocations(locs: Location.LocationObject[]) {
   const l = locs[locs.length - 1];
   if (!l) return;
   const acc = l.coords.accuracy ?? null;
-  const v = l.coords.speed;
+  const v = l.coords.speed; // m/s; bisa null atau -1 jika tidak valid
 
   if (v == null || v < 0 || (acc != null && acc > MAX_ACCURACY_M)) {
-    set({ accuracy: acc });
+    set({ accuracy: acc }); // sinyal buruk: jangan kirim -> ESP menampilkan "--" setelah 5 dtk
     return;
   }
 
@@ -63,6 +66,7 @@ function onLocations(locs: Location.LocationObject[]) {
   set({ kmh: shown, accuracy: acc, error: null });
 
   const now = Date.now();
+  // kirim saat berubah, dan minimal tiap 2 dtk sebagai "heartbeat" agar ESP tidak menganggap basi
   if (shown !== lastSent || now - lastSentAt > 2000) {
     lastSent = shown;
     lastSentAt = now;
@@ -77,13 +81,12 @@ if (Platform.OS === "android") {
       set({ error: error.message });
       return;
     }
-    const locations = (
-      data as { locations?: Location.LocationObject[] } | undefined
-    )?.locations;
+    const locations = (data as { locations?: Location.LocationObject[] } | undefined)?.locations;
     if (locations?.length) onLocations(locations);
   });
 }
 
+// ---------- kontrol ----------
 export async function syncSpeedRunning() {
   if (Platform.OS !== "android") return;
   try {
@@ -97,11 +100,14 @@ export async function syncSpeedRunning() {
 export async function startSpeed(): Promise<{ ok: boolean; msg?: string }> {
   try {
     const fg = await Location.requestForegroundPermissionsAsync();
-    if (fg.status !== "granted")
-      return { ok: false, msg: "Izin lokasi ditolak" };
+    if (fg.status !== "granted") return { ok: false, msg: "Izin lokasi ditolak" };
 
     if (!(await Location.hasServicesEnabledAsync()))
       return { ok: false, msg: "Aktifkan Lokasi/GPS di HP dulu" };
+
+    // Izin "sepanjang waktu" TIDAK diperlukan: foreground service bertipe location yang dimulai
+    // saat app terlihat di layar tetap boleh membaca lokasi ketika Maps di depan (Android 10+).
+    // Karena itu startSpeed() harus dipanggil dari UI (app sedang tampil), bukan dari background.
 
     if (await Location.hasStartedLocationUpdatesAsync(SPEED_TASK)) {
       await Location.stopLocationUpdatesAsync(SPEED_TASK);
@@ -135,5 +141,5 @@ export async function stopSpeed() {
   } catch {}
   set({ running: false, kmh: null, accuracy: null });
   smooth = null;
-  void sendJson({ cmd: "speed", kmh: -1 });
+  void sendJson({ cmd: "speed", kmh: -1 }); // ESP kembali ke layout tanpa speed
 }
