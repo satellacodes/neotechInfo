@@ -17,14 +17,31 @@
 #define PIN_VBAT    34          // ADC1_CH6 (aman dipakai bersama BLE)
 #define PIN_BOOT    0           // tombol BOOT bawaan board: bangunkan dari tidur / tahan 8 dtk = reset pelacak
 
+// ---- KEYLESS: keluaran ke relay (tiap relay lewat driver MOSFET N low-side, koil 12 V dari aki) ----
+#define PIN_R_IGN     25   // relay kontak: PARALEL dengan saklar kunci asli -> bus kontak dapat +12 V
+#define PIN_R_CDI     26   // relay daya CDI: SERI di kabel power CDI
+#define PIN_R_START   27   // relay tombol starter: PARALEL dengan tombol starter
+#define PIN_R_HORN    16   // relay tombol klakson: PARALEL dengan tombol klakson
+#define PIN_R_TURN_L  17   // relay +12 V (sekring) ke kabel riting kiri
+#define PIN_R_TURN_R  18   // relay +12 V (sekring) ke kabel riting kanan
+// ---- KEYLESS: masukan ----
+#define PIN_KEYSENSE  33   // bus kontak -> 27k seri, 10k ke GND, zener 3.3 V paralel 10k (RTC GPIO: bisa membangunkan dari tidur)
+#define PIN_NEUTRAL   35   // kabel lampu N -> 33k seri, 10k ke GND (GPIO input-only)
+
 // ============ KALIBRASI ============
 #define R1_KOHM     10.0f       // resistor atas (ke +12V)
 #define R2_KOHM     2.0f        // resistor bawah (ke GND): 5x 10k paralel = 2.0k (jika pakai 2.2k, ganti 2.2f)
 #define DIVIDER     ((R1_KOHM + R2_KOHM) / R2_KOHM)   // 6.0 (R2=2.0k) / 5.545 (R2=2.2k)
 #define VBAT_CAL    1.000f      // koreksi: isi = V_multimeter / V_display
 
-#define V_ENGINE_ON   13.1f     // >= ini (3 dtk) -> mesin hidup / charging
-#define V_ENGINE_OFF  12.7f     // <= ini (3 dtk) -> mesin mati
+// Deteksi mesin (disetel dari ukuran di GL Pro: idle dingin tanpa lampu depan 12.9-13.1 V,
+// idle + lampu depan hanya 11.3-11.6 V = SAMA dengan kontak ON mesin mati + lampu depan).
+// Jadi tegangan rendah TIDAK dianggap mesin mati. Mesin dianggap hidup begitu tegangan >= V_ENGINE_ON
+// (3 dtk), lalu tetap dianggap hidup selama dalam ENGINE_HOLD_MS terakhir pernah >= V_ENGINE_ON
+// (menggas sebentar menyegarkan penahan) dan tegangan belum jatuh <= V_ENGINE_FLOOR (mesin mati/starter).
+#define V_ENGINE_ON      13.0f
+#define V_ENGINE_FLOOR   10.0f
+#define ENGINE_HOLD_MS   300000UL   // 5 menit
 #define ENGINE_DEBOUNCE_MS 3000
 
 #define NAV_STALE_MS  120000UL  // nav otomatis tanpa update > 2 mnt -> "menunggu rute"
@@ -37,8 +54,34 @@
 #define PARK_LOWBAT_WAKE_S  60        // aki lemah: bangun lebih jarang, tanpa beacon
 #define V_WAKE_RUN          13.0f     // >= ini saat bangun = mesin hidup/charging -> boot normal
 #define V_CUTOFF            11.8f     // < ini saat parkir -> hentikan beacon (selamatkan aki untuk starter)
-#define V_RESUME            12.5f     // >= ini -> beacon aktif lagi
+#define V_RESUME            12.3f     // >= ini -> beacon aktif lagi (aki GL Pro istirahat ~12.4 V; 12.5 tidak akan tercapai)
 #define DEF_PARK_MIN        3
+
+// ============ KEYLESS ============
+// Mode 0 = MANUAL : kunci asli dipakai; ESP32 hanya menutup relay CDI selama kunci ON.
+// Mode 1 = KEYLESS: CDI TERPUTUS selama terkunci. Hidupkan kontak / starter hanya dari app
+//                   bila HP terautentikasi (pairing + passkey) DAN berada dalam jarak (RSSI >= ambang).
+#define KL_REQUIRE_PAIRING  1        // 1 = kendali relay hanya lewat link terenkripsi + passkey. Jangan 0 kecuali debug.
+#define KL_NEAR_DEFAULT     (-72)    // dBm, diganti hasil kalibrasi 5 m dari app
+#define KL_NEAR_HYST        6        // dB: keluar dari "dekat" bila < ambang - 6
+#define KL_START_MS         3500UL   // starter menyala maks. 3,5 dtk
+#define KL_COOL_MS          3000UL   // jeda antar percobaan starter
+#define KL_FAIL_MAX         3        // 3 percobaan gagal -> kunci starter 30 dtk (lindungi motor starter)
+#define KL_LOCKOUT_MS       30000UL
+#define KL_START_MIN_V      10.8f    // aki di bawah ini: starter ditolak
+#define V_START_DIP         11.2f    // tegangan turun di bawah ini = starter sedang menarik arus
+#define V_START_RECOVER     12.6f    // lalu pulih di atas ini = mesin sudah menyala
+#define KL_KILL_WARN_MS     5000UL   // peringatan riting sebelum mesin yang sedang jalan dimatikan
+#define KL_MOVING_KMH       15       // kill ditolak bila kecepatan GPS dari app di atas ini (kecuali force)
+#define KL_AUTOOFF_MS       180000UL // kontak ON tapi mesin tak pernah menyala -> mati sendiri
+#define KL_SESSION_IDLE_MS  45000UL  // sesi app tanpa perintah (kontak mati) -> putus & tidur
+#define KL_NO_SESSION_MS    4000UL   // tidak ada sesi -> tidur
+#define KL_PAIR_MS          120000UL
+#define KL_ALARM_COOL_MS    20000UL
+#define KL_ADV_WINDOW_MS    200UL    // jendela iklan terhubung tiap bangun
+#define KL_BOOST_SEC        120      // setelah sesi: siklus bangun 2 dtk selama 2 menit (kalau Anda kembali sebentar)
+static const uint8_t  WAKE_PROF_S[3] = {2, 4, 8};      // Sigap / Normal / Hemat
+static const uint16_t LOCK_PROF_S[4] = {30, 120, 300, 0};   // 0 = tidak pernah kunci otomatis
 
 // ============ FIND HUB (FMDN) ============
 // Mengikuti firmware referensi GoogleFindMyTools: frame service-data 0xFEAA, tipe 0x41, 20 byte
@@ -68,7 +111,7 @@ Preferences prefs;
 
 // ============ STATE ============
 int           displayMode    = 0;      // 0=V, 1=waktu, 2=nav
-bool          idleDisplay    = true;   // true = greeting
+bool          idleDisplay    = true;   // true = sapaan "Hai Dimas"
 float         batteryVoltage = 0.0f;
 float         vbatFiltered   = 0.0f;
 bool          engineRunning  = false;
@@ -103,7 +146,8 @@ enum AdvMode : uint8_t { ADV_NONE, ADV_APP, ADV_FIND };
 AdvMode       advMode        = ADV_NONE;
 
 // bertahan selama deep sleep
-RTC_DATA_ATTR uint16_t rtcCycles  = 0;
+RTC_DATA_ATTR uint32_t rtcSecAcc  = 0;      // detik sejak beacon Find Hub terakhir
+RTC_DATA_ATTR uint16_t rtcBoost   = 0;      // detik sisa siklus bangun cepat setelah sesi app
 RTC_DATA_ATTR uint8_t  rtcLowBatt = 0;
 
 // splash saat pertama dialiri daya, lalu layar idle
@@ -133,15 +177,65 @@ struct NavData {
   unsigned long lastUpdate;
 } nav;
 
-// ============ BLE CALLBACKS (jalan di task BLE -> hanya enqueue) ============
+// ============ KEYLESS: STATE ============
+uint8_t       klMode        = 0;          // 0 manual, 1 keyless
+bool          ignOn         = false;      // sesi kontak keyless: relay kontak + CDI hidup
+bool          ignRelayOn    = false;      // kondisi fisik relay kontak (juga hidup sebentar saat "cari motor")
+bool          cdiOn         = false;
+bool          ignSawCharge  = false;      // sejak kontak ON pernah terlihat pengisian (mesin pernah hidup)
+unsigned long ignAt         = 0;
+unsigned long lastHighMs    = 0;          // terakhir tegangan >= V_ENGINE_ON
+uint8_t       wakeProf      = 1;          // 0 sigap 2s, 1 normal 4s, 2 hemat 8s
+uint8_t       lockProf      = 1;          // 0 30s, 1 2mnt, 2 5mnt, 3 mati
+bool          neutralReq    = true;       // starter butuh posisi netral
+bool          autoOff       = true;       // kontak ON tanpa mesin -> mati sendiri
+bool          hornIgn       = true;       // klakson butuh bus kontak hidup (umumnya iya)
+bool          warnFar       = true;       // bunyi 2x bila HP menjauh saat kontak ON
+int8_t        rssiThr       = KL_NEAR_DEFAULT;
+float         rssiEma       = -100.0f;
+int           rssiN         = 0;
+bool          nearOk        = false;
+volatile uint16_t connHandle = 0xFFFF;
+unsigned long lastRssiAt    = 0;
+unsigned long calibUntil    = 0;
+long          calibSum      = 0;
+int           calibCnt      = 0;
+volatile unsigned long pairUntil = 0;
+uint32_t      pairPin       = 0;
+unsigned long oledForceUntil = 0;
+uint16_t      tamperCount   = 0;
+bool          klForce       = false;      // kirim frame K secepatnya
+char          noticeBuf[28] = "";
+bool          bleReady      = false;
+bool          quietWake     = false;      // bangun karena sesi app saat parkir: OLED tetap mati
+uint8_t       frameN        = 0;
+
+inline bool pairingActive() { return pairUntil != 0 && (long)(pairUntil - millis()) > 0; }
+void setNotice(const char* s) { strncpy(noticeBuf, s, sizeof(noticeBuf) - 1); noticeBuf[sizeof(noticeBuf) - 1] = 0; }
+
+// ============ BLE CALLBACKS (jalan di task BLE -> hanya enqueue / set flag) ============
 class SrvCb : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* s, NimBLEConnInfo& info) override {
     bleConnected = true;
+    connHandle   = info.getConnHandle();
+    rssiN = 0; nearOk = false;
     // interval 30-60 ms, latency 0, supervision timeout 4 dtk (stabil di motor)
     s->updateConnParams(info.getConnHandle(), 24, 48, 0, 400);
+    // di luar mode pairing passkey diacak -> HP asing tidak bisa menebak
+    if (!pairingActive()) NimBLEDevice::setSecurityPasskey(100000 + (esp_random() % 900000));
   }
   void onDisconnect(NimBLEServer* s, NimBLEConnInfo& info, int reason) override {
     bleConnected = false;
+    connHandle   = 0xFFFF;
+    nearOk = false; rssiN = 0;
+  }
+  void onAuthenticationComplete(NimBLEConnInfo& info) override {
+    if (info.isEncrypted() && pairingActive()) {   // pairing sukses -> tutup mode pairing
+      pairUntil = 0;
+      NimBLEDevice::setSecurityPasskey(100000 + (esp_random() % 900000));
+      setNotice("paired");
+      klForce = true;
+    }
   }
 };
 
@@ -213,9 +307,16 @@ void updateVoltage() {
 
 // ============ ENGINE ============
 void updateEngine(unsigned long now) {
+  if (klMode == 1 && !ignOn && !ignRelayOn) {          // keyless terkunci: mesin tak mungkin hidup (tegangan tinggi = charger)
+    if (engineRunning) { engineRunning = false; prefs.putULong("engsec", totalEngineSec); lastSavedSec = totalEngineSec; }
+    engineCondSince = 0;
+    return;
+  }
   // kandidat perpindahan state (histeresis)
-  bool wantToggle = engineRunning ? (batteryVoltage <= V_ENGINE_OFF)
-                                  : (batteryVoltage >= V_ENGINE_ON);
+  if (batteryVoltage >= V_ENGINE_ON) lastHighMs = now;
+  bool wantToggle = engineRunning
+      ? (batteryVoltage <= V_ENGINE_FLOOR || (now - lastHighMs) >= ENGINE_HOLD_MS)
+      : (batteryVoltage >= V_ENGINE_ON);
   if (wantToggle) {
     if (engineCondSince == 0) engineCondSince = now;
     else if (now - engineCondSince >= ENGINE_DEBOUNCE_MS) {
@@ -328,7 +429,7 @@ void drawIdle(unsigned long now) {
 
   // status bar
   u8g2.setFont(u8g2_font_5x7_tr);
-  u8g2.drawStr(2, 8, "GL PRO NEOTECH");
+  u8g2.drawStr(2, 8, klMode ? (ignOn ? "KEYLESS  ON" : "KEYLESS LOCK") : "GL PRO NEOTECH");
   char v[10];
   snprintf(v, sizeof(v), "%.1fV", batteryVoltage);
   int vw = u8g2.getStrWidth(v);
@@ -434,16 +535,19 @@ void drawVoltage() {
   u8g2.drawFrame(2, 45, 124, 7);
   u8g2.drawBox(4, 47, (int)(120 * f), 3);
   int tLow = 2 + (int)(124 * ((11.8f - VMIN) / (VMAX - VMIN)));
-  int tChg = 2 + (int)(124 * ((13.2f - VMIN) / (VMAX - VMIN)));
+  int tChg = 2 + (int)(124 * ((V_ENGINE_ON - VMIN) / (VMAX - VMIN)));
   u8g2.drawVLine(tLow, 43, 2);
   u8g2.drawVLine(tChg, 43, 2);
 
   // status
   const char* s;
   bool warn = false;
-  if      (batteryVoltage < 11.8f) { s = "AKI LEMAH!";  warn = true; }
+  // Mesin hidup + beban lampu: 11.0-12.4 V di idle itu normal di motor ini (bukan aki lemah)
+  float lowTh = engineRunning ? 10.8f : 11.8f;
+  if      (batteryVoltage < lowTh)  { s = "AKI LEMAH!";  warn = true; }
   else if (batteryVoltage > 14.9f) { s = "OVER CHARGE!"; warn = true; }
   else if (batteryVoltage >= V_ENGINE_ON) s = "CHARGING";
+  else if (engineRunning)                 s = "BEBAN BESAR";
   else if (batteryVoltage >= 12.4f) s = "AKI OK";
   else                              s = "AKI CUKUP";
 
@@ -601,12 +705,11 @@ void applyBrightness() {
 }
 
 // ============ FIND HUB (FMDN) ============
-struct FindProfile { uint16_t everyCycles; uint16_t windowMs; };
-// everyCycles dihitung dalam siklus bangun PARK_WAKE_S detik
+struct FindProfile { uint16_t everySec; uint16_t windowMs; };
 static const FindProfile FIND_PROF[3] = {
-  {6,  8000},     // 0 Ketat    : jendela 8 dtk tiap ~60 dtk
-  {30, 10000},    // 1 Seimbang : jendela 10 dtk tiap ~5 mnt
-  {90, 10000},    // 2 Hemat    : jendela 10 dtk tiap ~15 mnt
+  {60,  8000},    // 0 Ketat    : jendela 8 dtk tiap ~1 mnt
+  {300, 10000},   // 1 Seimbang : jendela 10 dtk tiap ~5 mnt
+  {900, 10000},   // 2 Hemat    : jendela 10 dtk tiap ~15 mnt
 };
 
 static int hexv(char c) {
@@ -722,70 +825,521 @@ bool pinGate(JsonDocument& doc, bool allowSet) {
   return true;
 }
 
+// ============ KEYLESS: RELAY & MASUKAN ============
+void relaysInit() {
+  const uint8_t p[] = {PIN_R_IGN, PIN_R_CDI, PIN_R_START, PIN_R_HORN, PIN_R_TURN_L, PIN_R_TURN_R};
+  for (uint8_t pin : p) { pinMode(pin, OUTPUT); digitalWrite(pin, LOW); }
+  pinMode(PIN_KEYSENSE, INPUT);
+  pinMode(PIN_NEUTRAL, INPUT);
+}
+void rlyIgn(bool on) { ignRelayOn = on; digitalWrite(PIN_R_IGN, on ? HIGH : LOW); }
+void rlyCdi(bool on) { cdiOn = on;      digitalWrite(PIN_R_CDI, on ? HIGH : LOW); }
+void starterOff()    { digitalWrite(PIN_R_START, LOW); }
+bool keyBusHigh()    { return digitalRead(PIN_KEYSENSE) == HIGH; }
+// lampu N menarik kabel ke GND saat netral (0 V); di gigi lain kabel ~ +12 V lewat lampu
+bool isNeutral() {
+  uint32_t s = 0;
+  for (int i = 0; i < 8; i++) s += analogReadMilliVolts(PIN_NEUTRAL);
+  return (s / 8) < 800;
+}
+unsigned long sinceHigh(unsigned long now) { return lastHighMs ? (now - lastHighMs) : 0xFFFFFFFFUL; }
+bool engineLikelyRunning(unsigned long now) { return engineRunning || sinceHigh(now) < 30000UL; }
+
+// penanda "sedang dalam sesi kontak" disimpan agar reset mendadak (brown-out) saat jalan tidak mematikan motor
+void saveRunFlag(bool on) { prefs.putBool("ign_run", on); }
+
+void setIgnSession(bool on) {
+  if (on) {
+    rlyIgn(true);
+    rlyCdi(true);
+    ignOn = true;
+    ignAt = millis();
+    ignSawCharge = false;
+  } else {
+    rlyCdi(false);
+    rlyIgn(false);
+    ignOn = false;
+  }
+  saveRunFlag(ignOn);
+  klForce = true;
+}
+
+// ============ KEYLESS: SEKUENS RITING / KLAKSON ============
+struct FStep { uint16_t t; uint8_t m; };          // m bit0 = riting kiri+kanan, bit1 = klakson (keadaan mutlak pada waktu t)
+// "Cari motor": 3 kali kilat ganda ala lampu pesawat, klakson 2x cepat dengan jeda
+static const FStep SEQ_FIND[] = {
+  {0, 3}, {120, 2}, {150, 0}, {220, 1}, {340, 0}, {600, 2}, {750, 0},
+  {1100, 1}, {1220, 0}, {1320, 1}, {1440, 0},
+  {2200, 1}, {2320, 0}, {2420, 1}, {2540, 0}, {2650, 0},
+};
+static const FStep SEQ_WARN[] = {{0, 2}, {120, 0}, {240, 2}, {360, 0}, {420, 0}};   // 2 bip: "HP menjauh"
+static FStep seqDyn[40];                           // alarm / peringatan kill (dibangun saat dipakai)
+enum SeqKind : uint8_t { SQ_NONE, SQ_FIND, SQ_WARN, SQ_ALARM, SQ_KILLWARN };
+SeqKind        seqKind = SQ_NONE;
+const FStep*   seqTbl  = nullptr;
+uint8_t        seqLen = 0, seqIdx = 0;
+unsigned long  seqT0 = 0, seqPreUntil = 0, alarmCoolUntil = 0;
+bool           seqTempIgn = false;
+
+void seqOut(uint8_t m) {
+  digitalWrite(PIN_R_TURN_L, (m & 1) ? HIGH : LOW);
+  digitalWrite(PIN_R_TURN_R, (m & 1) ? HIGH : LOW);
+  digitalWrite(PIN_R_HORN,   (m & 2) ? HIGH : LOW);
+}
+void seqStop() {
+  seqOut(0);
+  seqKind = SQ_NONE;
+  seqPreUntil = 0;
+  if (seqTempIgn) { seqTempIgn = false; if (!ignOn) rlyIgn(false); }
+  klForce = true;
+}
+bool seqStart(uint8_t k) {
+  if (seqKind != SQ_NONE) return false;
+  int n = 0;
+  switch (k) {
+    case SQ_FIND: seqTbl = SEQ_FIND; seqLen = sizeof(SEQ_FIND) / sizeof(FStep); break;
+    case SQ_WARN: seqTbl = SEQ_WARN; seqLen = sizeof(SEQ_WARN) / sizeof(FStep); break;
+    case SQ_ALARM:                                   // 10 dtk: riting menyala 0,5 dtk + klakson 0,25 dtk, tiap 1 dtk
+      for (int i = 0; i < 10; i++) {
+        seqDyn[n++] = {(uint16_t)(i * 1000), 3};
+        seqDyn[n++] = {(uint16_t)(i * 1000 + 250), 1};
+        seqDyn[n++] = {(uint16_t)(i * 1000 + 500), 0};
+      }
+      seqTbl = seqDyn; seqLen = n; break;
+    case SQ_KILLWARN:                                // 5 dtk riting kedip 2 Hz
+      for (int i = 0; i < 10; i++) {
+        seqDyn[n++] = {(uint16_t)(i * 500), 1};
+        seqDyn[n++] = {(uint16_t)(i * 500 + 250), 0};
+      }
+      seqTbl = seqDyn; seqLen = n; break;
+    default: return false;
+  }
+  seqKind = (SeqKind)k;
+  seqIdx = 0;
+  seqT0 = millis();
+  // klakson umumnya mendapat +12 V lewat kontak: nyalakan bus kontak sebentar (CDI tetap putus)
+  if ((k == SQ_FIND || k == SQ_WARN) && hornIgn && !ignRelayOn) {
+    rlyIgn(true);
+    seqTempIgn = true;
+    seqPreUntil = millis() + 350;
+  }
+  klForce = true;
+  return true;
+}
+void lockNow(const char* why);
+void seqTick(unsigned long now) {
+  if (seqKind == SQ_NONE) return;
+  if (seqPreUntil) {
+    if ((long)(now - seqPreUntil) < 0) return;
+    seqPreUntil = 0;
+    seqT0 = now;
+  }
+  unsigned long el = now - seqT0;
+  while (seqIdx < seqLen && el >= seqTbl[seqIdx].t) seqOut(seqTbl[seqIdx++].m);
+  if (seqIdx >= seqLen) {
+    uint8_t k = seqKind;
+    seqStop();
+    if (k == SQ_ALARM)    alarmCoolUntil = now + KL_ALARM_COOL_MS;
+    if (k == SQ_KILLWARN) lockNow("killed");
+  }
+}
+
+// ============ KEYLESS: STARTER ============
+enum StartPh : uint8_t { SP_NONE, SP_PREIGN, SP_CRANK, SP_COOL };
+StartPh        spPh = SP_NONE;
+unsigned long  spAt = 0, spCrankAt = 0, spFastAt = 0, startLockUntil = 0;
+float          spMinV = 99, spV = 0;
+uint8_t        spRecov = 0, startFails = 0;
+bool           spOk = false;
+
+void startAbort(const char* why) {
+  starterOff();
+  spPh = SP_NONE;
+  if (why) errCode = why;
+  klForce = true;
+}
+
+void lockNow(const char* why) {
+  starterOff();
+  spPh = SP_NONE;
+  if (seqKind != SQ_NONE) seqStop();
+  setIgnSession(false);
+  if (why) setNotice(why);
+  klForce = true;
+}
+
+void startTick(unsigned long now) {
+  switch (spPh) {
+    case SP_NONE: return;
+    case SP_PREIGN: {
+      if ((long)(now - spAt) < 0) return;
+      float v = readVoltageRaw();
+      if (v < KL_START_MIN_V)                { lockNow(nullptr); errCode = "lowbat"; return; }
+      if (neutralReq && !isNeutral())        { startAbort("gear"); return; }
+      digitalWrite(PIN_R_START, HIGH);
+      spCrankAt = now; spFastAt = 0; spMinV = v; spV = v; spRecov = 0; spOk = false;
+      spPh = SP_CRANK;
+      setNotice("cranking");
+      klForce = true;
+      return;
+    }
+    case SP_CRANK: {
+      if (!bleConnected) { startAbort("link"); spAt = now + KL_COOL_MS; spPh = SP_COOL; return; }   // link putus -> starter berhenti
+      if (now - spFastAt >= 40) {
+        spFastAt = now;
+        float v = readVoltageRaw();
+        spV = 0.5f * spV + 0.5f * v;
+        if (spV < spMinV) spMinV = spV;
+        if (spMinV < V_START_DIP && spV >= V_START_RECOVER) { if (spRecov < 255) spRecov++; }
+        else spRecov = 0;
+      }
+      bool done    = spRecov >= 5;                         // pulih >= 200 ms = mesin menyala
+      bool timeout = (now - spCrankAt) >= KL_START_MS;
+      if (done || timeout) {
+        starterOff();
+        spOk = done;
+        spAt = now + KL_COOL_MS;
+        spPh = SP_COOL;
+        setNotice(done ? "start_ok" : "start_end");
+        klForce = true;
+      }
+      return;
+    }
+    case SP_COOL:
+      if ((long)(now - spAt) < 0) return;
+      spPh = SP_NONE;
+      if (spOk || engineRunning) startFails = 0;
+      else if (++startFails >= KL_FAIL_MAX) {
+        startFails = 0;
+        startLockUntil = now + KL_LOCKOUT_MS;
+        setNotice("cool");
+      }
+      klForce = true;
+      return;
+  }
+}
+
+// ============ KEYLESS: PROXIMITY (RSSI link terhubung) ============
+void rssiTick(unsigned long now) {
+  if (!bleConnected || connHandle == 0xFFFF) { nearOk = false; rssiN = 0; return; }
+  if (now - lastRssiAt < 300) return;
+  lastRssiAt = now;
+  int8_t r = 0;
+  if (ble_gap_conn_rssi(connHandle, &r) != 0 || r >= 0 || r < -110) return;
+  rssiEma = rssiN ? rssiEma * 0.7f + (float)r * 0.3f : (float)r;
+  if (rssiN < 100) rssiN++;
+  if (calibUntil) {                                      // kalibrasi: rata-rata RSSI selama 6 dtk
+    calibSum += r; calibCnt++;
+    if ((long)(now - calibUntil) >= 0) {
+      calibUntil = 0;
+      int avg = calibCnt ? (int)(calibSum / calibCnt) : -72;
+      rssiThr = (int8_t)constrain(avg - 4, -95, -40);   // margin 4 dB
+      prefs.putChar("rssi_thr", rssiThr);
+      snprintf(noticeBuf, sizeof(noticeBuf), "calib:%d", (int)rssiThr);
+      klForce = true;
+    }
+  }
+  if (!nearOk) { if (rssiN >= 3 && rssiEma >= (float)rssiThr) nearOk = true; }
+  else if (rssiEma < (float)rssiThr - KL_NEAR_HYST) nearOk = false;
+}
+
+// ============ KEYLESS: PAIRING (LE Secure Connections, passkey tampil di OLED) ============
+void startPairing(unsigned long ms, bool wipeBonds) {
+  if (wipeBonds) NimBLEDevice::deleteAllBonds();
+  pairPin = 100000 + (esp_random() % 900000);
+  NimBLEDevice::setSecurityPasskey(pairPin);
+  pairUntil = millis() + ms;
+  oledForceUntil = pairUntil;
+  klForce = true;
+}
+void endPairing() {
+  pairUntil = 0;
+  NimBLEDevice::setSecurityPasskey(100000 + (esp_random() % 900000));
+}
+
+// ============ KEYLESS: OLED (mati total saat sesi diam: hemat daya) ============
+bool oledInited = false, oledOn = false;
+void oledEnsure() {
+  if (!oledInited) {
+    Wire.begin(PIN_SDA, PIN_SCL);
+    Wire.setClock(400000);
+    Wire.setTimeOut(50);
+    u8g2.begin();
+    u8g2.setBusClock(400000);
+    oledInited = true;
+    oledOn = false;
+  }
+  if (!oledOn) {
+    u8g2.setPowerSave(0);
+    applyBrightness();
+    oledOn = true;
+    lastDraw = 0;
+    lastDispInit = millis();
+  }
+}
+void oledOff() {
+  if (oledInited && oledOn) { u8g2.setPowerSave(1); oledOn = false; }
+}
+
+// ============ KEYLESS: KILL / KUNCI ============
+void killRequest(bool force, unsigned long now) {
+  if (seqKind == SQ_KILLWARN) return;
+  if (!ignOn && !cdiOn) { lockNow("locked"); return; }
+  if (!engineLikelyRunning(now)) { lockNow("locked"); return; }
+  bool fresh = speedActive && (now - speedAt) < SPEED_STALE_MS;
+  if (fresh && speedKmh > KL_MOVING_KMH && !force) { errCode = "moving"; return; }
+  if (seqKind != SQ_NONE) seqStop();
+  seqStart(SQ_KILLWARN);
+  setNotice("killing");
+}
+
+// ============ KEYLESS: TICK UTAMA (dipanggil tiap putaran loop) ============
+void klTick(unsigned long now) {
+  if (pairUntil && (long)(now - pairUntil) >= 0) endPairing();
+  rssiTick(now);
+  seqTick(now);
+  startTick(now);
+  if (ignOn && engineRunning) ignSawCharge = true;
+
+  bool keyBus = keyBusHigh();
+
+  if (klMode == 0) {
+    // MANUAL: CDI mengikuti kunci asli (150 ms debounce). Bila ESP mati, pakai saklar bypass darurat.
+    static unsigned long chg = 0;
+    bool want = keyBus && !ignRelayOn;
+    if (want != cdiOn) { if (!chg) chg = now; else if (now - chg >= 150) { rlyCdi(want); chg = 0; } }
+    else chg = 0;
+    return;
+  }
+
+  // ---- KEYLESS ----
+  // 1) tamper: bus kontak hidup / mesin mengisi padahal bukan kita yang menyalakan
+  static unsigned long tampSince = 0;
+  bool intrusion = !ignRelayOn && !ignOn && keyBus;      // (tegangan tinggi saja bisa dari charger aki: bukan tanda pembobolan)
+  if (intrusion && seqKind == SQ_NONE && spPh == SP_NONE) {
+    if (!tampSince) tampSince = now;
+    else if (now - tampSince >= 400 && (long)(now - alarmCoolUntil) >= 0) {
+      tampSince = 0;
+      if (tamperCount < 999) { tamperCount++; prefs.putUShort("tamper", tamperCount); }
+      seqStart(SQ_ALARM);
+      setNotice("tamper");
+    }
+  } else if (!intrusion) {
+    tampSince = 0;
+  }
+
+  if (!ignOn) return;
+
+  // 2) HP hilang saat kontak ON
+  static unsigned long absentSince = 0;
+  static bool warned = false;
+  bool absent = !bleConnected || (rssiN >= 3 && !nearOk);
+  if (!absent) { absentSince = 0; warned = false; }
+  else {
+    if (!absentSince) absentSince = now;
+    unsigned long gone = now - absentSince;
+    if (warnFar && !warned && gone >= 20000UL && seqKind == SQ_NONE) { warned = true; seqStart(SQ_WARN); }
+    uint16_t lk = LOCK_PROF_S[lockProf & 3];
+    // kunci hanya bila HP sudah lama hilang DAN tidak ada pengisian terlihat selama itu (mesin tidak sedang digas)
+    if (lk && gone >= lk * 1000UL && sinceHigh(now) >= lk * 1000UL && seqKind == SQ_NONE && spPh == SP_NONE) {
+      lockNow("locked_far");
+      return;
+    }
+  }
+
+  // 3) kontak ON tapi mesin tak pernah hidup -> mati sendiri (hemat aki)
+  if (autoOff && !ignSawCharge && spPh == SP_NONE && seqKind == SQ_NONE && (now - ignAt) >= KL_AUTOOFF_MS)
+    lockNow("autooff");
+}
+
+// ============ BLE INIT (dipakai normal & siklus parkir) ============
+void bleInitFull() {
+  NimBLEDevice::init(DEVICE_NAME);
+  NimBLEDevice::setMTU(247);
+  NimBLEDevice::setPower(FIND_TX_DBM);
+#if KL_REQUIRE_PAIRING
+  NimBLEDevice::setSecurityAuth(true, true, true);          // bonding + MITM + Secure Connections
+  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY);   // HP mengetik passkey yang tampil di OLED
+  NimBLEDevice::setSecurityPasskey(pairingActive() ? pairPin : (100000 + (esp_random() % 900000)));
+#endif
+  pServer = NimBLEDevice::createServer();
+  pServer->setCallbacks(new SrvCb());
+  pServer->advertiseOnDisconnect(false);     // iklan diatur advTick()/parkedWake()
+
+  NimBLEService* svc = pServer->createService(SVC_UUID);
+  uint32_t rxProps = NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR;
+#if KL_REQUIRE_PAIRING
+  rxProps |= NIMBLE_PROPERTY::WRITE_AUTHEN;                 // tulis hanya dari HP yang sudah pairing (autentik)
+#endif
+  NimBLECharacteristic* pRx = svc->createCharacteristic(RX_UUID, rxProps);
+  pRx->setCallbacks(new RxCb());
+  pTxChar = svc->createCharacteristic(TX_UUID, NIMBLE_PROPERTY::NOTIFY);
+  svc->start();
+  bleReady = true;
+}
+
+// ============ KEYLESS: PERINTAH DARI APP ============
+void handleKl(const char* cmd, JsonDocument& doc) {
+#if !KL_REQUIRE_PAIRING
+  errCode = "nopair";
+  return;
+#endif
+  unsigned long now = millis();
+  bool busy = (spPh != SP_NONE) || (seqKind != SQ_NONE && seqKind != SQ_ALARM && seqKind != SQ_WARN);
+
+  if (!strcmp(cmd, "kl_mode")) {
+    if (ignOn || engineLikelyRunning(now) || busy) { errCode = "busy"; return; }
+    klMode = ((int)(doc["val"] | 0)) ? 1 : 0;
+    prefs.putUChar("kl_mode", klMode);
+    if (klMode == 1) rlyCdi(false);          // masuk keyless: CDI langsung putus
+    setNotice(klMode ? "mode_kl" : "mode_man");
+  }
+  else if (!strcmp(cmd, "kl_ign")) {
+    if ((int)(doc["en"] | 0) == 1) {
+      if (klMode != 1)  { errCode = "mode"; return; }
+      if (!nearOk)      { errCode = "far";   return; }
+      if (busy)         { errCode = "busy";  return; }
+      if (batteryVoltage < KL_START_MIN_V) { errCode = "lowbat"; return; }
+      if (seqKind == SQ_ALARM || seqKind == SQ_WARN) seqStop();
+      setIgnSession(true);
+      setNotice("ign_on");
+    } else {
+      if (klMode != 1) { errCode = "mode"; return; }
+      killRequest((int)(doc["force"] | 0) == 1, now);
+    }
+  }
+  else if (!strcmp(cmd, "kl_start")) {
+    if (klMode != 1)                       { errCode = "mode";    return; }
+    if (!nearOk)                           { errCode = "far";     return; }
+    if (busy)                              { errCode = "busy";    return; }
+    if (engineLikelyRunning(now))          { errCode = "running"; return; }
+    if ((long)(now - startLockUntil) < 0)  { errCode = "cool";    return; }
+    if (batteryVoltage < KL_START_MIN_V)   { errCode = "lowbat";  return; }
+    if (seqKind == SQ_ALARM || seqKind == SQ_WARN) seqStop();
+    if (!ignOn) { setIgnSession(true); spAt = now + 450; }      // beri waktu bus kontak stabil
+    else        { spAt = now + 50; }
+    spPh = SP_PREIGN;
+    setNotice("starting");
+  }
+  else if (!strcmp(cmd, "kl_stop")) {
+    if (spPh == SP_CRANK || spPh == SP_PREIGN) startAbort(nullptr);
+    spPh = SP_NONE;
+  }
+  else if (!strcmp(cmd, "kl_kill")) {
+    if (klMode != 1) { errCode = "mode"; return; }
+    killRequest((int)(doc["force"] | 0) == 1, now);
+  }
+  else if (!strcmp(cmd, "kl_cancel")) {
+    if (seqKind == SQ_KILLWARN) { seqStop(); setNotice("cancel"); }
+  }
+  else if (!strcmp(cmd, "kl_find")) {
+    if (ignOn && engineLikelyRunning(now)) { errCode = "busy"; return; }
+    if (seqKind == SQ_ALARM) seqStop();
+    if (!seqStart(SQ_FIND)) { errCode = "busy"; return; }
+  }
+  else if (!strcmp(cmd, "kl_calib")) {
+    if (!bleConnected) return;
+    calibUntil = now + 6000; calibSum = 0; calibCnt = 0;
+    setNotice("calibrating");
+  }
+  else if (!strcmp(cmd, "kl_cfg")) {
+    if (doc["wp"].is<int>()) { wakeProf = (uint8_t)constrain((int)doc["wp"], 0, 2); prefs.putUChar("kl_wp", wakeProf); }
+    if (doc["lk"].is<int>()) { lockProf = (uint8_t)constrain((int)doc["lk"], 0, 3); prefs.putUChar("kl_lk", lockProf); }
+    if (doc["nr"].is<int>()) { neutralReq = (int)doc["nr"] != 0; prefs.putBool("kl_nr", neutralReq); }
+    if (doc["ao"].is<int>()) { autoOff    = (int)doc["ao"] != 0; prefs.putBool("kl_ao", autoOff); }
+    if (doc["hi"].is<int>()) { hornIgn    = (int)doc["hi"] != 0; prefs.putBool("kl_hi", hornIgn); }
+    if (doc["wf"].is<int>()) { warnFar    = (int)doc["wf"] != 0; prefs.putBool("kl_wf", warnFar); }
+  }
+  else if (!strcmp(cmd, "kl_pair")) {
+    startPairing(KL_PAIR_MS, false);          // tambah HP lain (tanpa menghapus yang lama)
+    setNotice("pair_open");
+  }
+  else if (!strcmp(cmd, "kl_ack")) {
+    tamperCount = 0;
+    prefs.putUShort("tamper", 0);
+  }
+  klForce = true;
+}
+
 // ============ TIDUR / PARKIR ============
+// Periode bangun: keyless = profil (2/4/8 dtk; 2 dtk selama "boost" setelah sesi), manual = 10 dtk.
+uint8_t wakePeriod() {
+  if (klMode == 0) return PARK_WAKE_S;
+  uint8_t p = WAKE_PROF_S[wakeProf > 2 ? 1 : wakeProf];
+  if (rtcBoost > 0) { p = 2; rtcBoost = rtcBoost > p ? rtcBoost - p : 0; }
+  if (rtcLowBatt && p < 8) p = 8;               // aki lemah: lebih jarang
+  return p;
+}
+
 void goSleep(uint32_t sec) {
   esp_sleep_enable_timer_wakeup((uint64_t)sec * 1000000ULL);
   rtc_gpio_pullup_en((gpio_num_t)PIN_BOOT);
   rtc_gpio_pulldown_dis((gpio_num_t)PIN_BOOT);
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_BOOT, 0);   // tombol BOOT membangunkan
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)PIN_BOOT, 0);                        // tombol BOOT membangunkan
+  esp_sleep_enable_ext1_wakeup(1ULL << PIN_KEYSENSE, ESP_EXT1_WAKEUP_ANY_HIGH); // bus kontak hidup (kunci diputar) membangunkan
   esp_deep_sleep_start();
   while (true) {}
 }
 
-// Jendela beacon saat parkir: hidupkan BLE, pancarkan frame Find Hub, matikan lagi.
-void runBeaconWindow(uint32_t ms) {
-  NimBLEDevice::init("");
-  NimBLEDevice::setPower(FIND_TX_DBM);
-  setFindAdv();
-  delay(ms);
-  NimBLEDevice::getAdvertising()->stop();
-  NimBLEDevice::deinit(true);
-}
-
-// Dipanggil di awal setup() saat bangun karena timer. Kembali hanya jika mesin menyala (boot normal).
-void parkedWake() {
-  setCpuFrequencyMhz(80);                    // cukup untuk BLE, hemat arus
+// Dipanggil di awal setup() saat bangun dari deep sleep.
+// Kembali (-> boot normal) hanya jika: tombol BOOT / kunci diputar / mesin mengisi / HP terhubung.
+void parkedWake(esp_sleep_wakeup_cause_t cause) {
   analogSetAttenuation(ADC_11db);
   analogReadResolution(12);
+  if (cause == ESP_SLEEP_WAKEUP_EXT0 || cause == ESP_SLEEP_WAKEUP_EXT1) return;   // BOOT / kunci kontak
   float v = readVoltageRaw();
-  if (v >= V_WAKE_RUN) return;               // mesin hidup / charging
-
-  Preferences p;
-  p.begin("glpro", true);
-  bool en       = p.getBool("fhn_en", false);
-  uint8_t prof  = p.getUChar("fhn_prof", 1);
-  bool keyOk    = p.getBytes("fhn_key", fhnKey, 20) == 20;
-  p.end();
-  if (prof > 2) prof = 1;
+  if (keyBusHigh() || (klMode == 0 && v >= V_WAKE_RUN)) return;                   // kontak / mesin hidup (keyless: charger aki tidak membangunkan)
 
   if (rtcLowBatt) { if (v >= V_RESUME) rtcLowBatt = 0; }
   else if (v < V_CUTOFF) rtcLowBatt = 1;
 
-  if (rtcLowBatt) goSleep(PARK_LOWBAT_WAKE_S);   // aki lemah: tanpa beacon
+  uint8_t period = wakePeriod();
+  rtcSecAcc += period;
+  uint8_t prof = fhnProfile > 2 ? 1 : fhnProfile;
+  bool beacon = !rtcLowBatt && fhnEnabled && fhnKeySet && rtcSecAcc >= FIND_PROF[prof].everySec;
 
-  if (en && keyOk) {
-    if (++rtcCycles >= FIND_PROF[prof].everyCycles) {
-      rtcCycles = 0;
-      runBeaconWindow(FIND_PROF[prof].windowMs);
-    }
+  bleInitFull();
+  if (beacon) {                                // jendela beacon Find Hub (non-connectable)
+    rtcSecAcc = 0;
+    setFindAdv();
+    delay(FIND_PROF[prof].windowMs);
   }
-  goSleep(PARK_WAKE_S);
+  setAppAdv();                                 // jendela iklan terhubung: app dapat menyambung
+  unsigned long t0 = millis();
+  while (millis() - t0 < KL_ADV_WINDOW_MS && !bleConnected) delay(5);
+  if (bleConnected) {                          // HP menyambung: lanjut boot, OLED tetap mati
+    quietWake = true;
+    return;
+  }
+  NimBLEDevice::getAdvertising()->stop();
+  NimBLEDevice::deinit(true);
+  goSleep(period);
 }
 
-// Masuk mode parkir dari mode normal: simpan jam mesin, matikan OLED & BLE, tidur.
+// Masuk mode parkir dari mode normal: simpan jam mesin, putus app, matikan OLED & BLE, tidur.
 void enterPark() {
   if (totalEngineSec != lastSavedSec) {
     prefs.putULong("engsec", totalEngineSec);
     lastSavedSec = totalEngineSec;
   }
-  u8g2.setPowerSave(1);                      // SSD1306 display OFF (arus ~µA)
+  if (bleConnected && pTxChar && pServer) {    // beri tahu app: ESP tidur, jangan menyambung ulang terus-menerus
+    pTxChar->setValue((const uint8_t*)"Z|1", 3);
+    pTxChar->notify();
+    delay(120);
+    pServer->disconnect(connHandle);
+    delay(250);
+  }
+  if (oledInited) u8g2.setPowerSave(1);        // SSD1306 display OFF (arus ~µA)
   NimBLEAdvertising* a = NimBLEDevice::getAdvertising();
   if (a) a->stop();
   NimBLEDevice::deinit(true);
-  rtcCycles  = 60000;                        // jendela beacon pertama langsung di bangun berikutnya
+  rtcSecAcc  = 100000;                         // jendela beacon pertama langsung di bangun berikutnya
+  rtcBoost   = (klMode == 1) ? KL_BOOST_SEC : 0;
   rtcLowBatt = (batteryVoltage < V_CUTOFF) ? 1 : 0;
+  uint8_t period = wakePeriod();
   prefs.end();
-  goSleep(rtcLowBatt ? PARK_LOWBAT_WAKE_S : PARK_WAKE_S);
+  setCpuFrequencyMhz(80);
+  goSleep(period);
 }
 
 // ============ COMMAND HANDLER (dipanggil dari loop) ============
@@ -890,6 +1444,9 @@ void handleCommand(const char* js) {
     wipeTracker();
     forceStatus = true;
   }
+  else if (!strncmp(cmd, "kl_", 3)) {
+    handleKl(cmd, doc);
+  }
   else if (!strcmp(cmd, "reset_time")) {
     totalEngineSec = 0;
     sessionSec = 0;
@@ -912,28 +1469,48 @@ void processQueue() {
   }
 }
 
-// ============ TELEMETRI KE HP (1 Hz, CSV pendek muat di MTU default) ============
+// ============ TELEMETRI KE HP ============
+// Frame (pemisah '|'):  E|kode galat   N|kode info   Z|1 ESP akan tidur
+//   K|mode|ign|cdi|st|near|rssi|netral|mesin|ambang|wake|lock|nr|ao|hi|wf|tamper|pair|calib
+//   S|kecerahan|find|profil|kunci|tidur|pin     I|nama|baris2     volt,mesin,detik (CSV)
 void notifyTelemetry(unsigned long now) {
   if (!bleConnected || !pTxChar) return;
-  if (now - lastNotify < 1000) return;
+  bool fast = klForce || spPh != SP_NONE || seqKind == SQ_KILLWARN;
+  if (now - lastNotify < (fast ? 300UL : 1000UL)) return;
   lastNotify = now;
-  char buf[72];
+  char buf[112];
   int n;
-  if (errCode) {                                 // galat perintah (PIN salah, kunci tidak valid, ...)
+  frameN++;
+  if (errCode) {                                 // galat perintah
     n = snprintf(buf, sizeof(buf), "E|%s", errCode);
     errCode = nullptr;
+  } else if (noticeBuf[0]) {                     // info kejadian (start_ok, locked, ...)
+    n = snprintf(buf, sizeof(buf), "N|%s", noticeBuf);
+    noticeBuf[0] = 0;
   } else if (forceInfo) {
     forceInfo = false;
     n = snprintf(buf, sizeof(buf), "I|%s|%s", idleName, idleLine2);
-  } else if (forceStatus || infoTick == 2) {     // status pengaturan: S|kecerahan|find|profil|kunci|tidur|pin
+  } else if (klForce || (frameN % 3) == 1) {     // status keyless
+    klForce = false;
+    int st = 0;
+    if (spPh == SP_PREIGN || spPh == SP_CRANK) st = 2;
+    else if (seqKind == SQ_KILLWARN)           st = 4;
+    else if (seqKind != SQ_NONE)               st = 5;
+    else if (ignOn && engineRunning)           st = 3;
+    else if (ignOn)                            st = 1;
+    int neu = (klMode == 1 && ignRelayOn) ? (isNeutral() ? 1 : 0) : 2;   // 2 = tidak diketahui (kontak mati)
+    n = snprintf(buf, sizeof(buf), "K|%u|%d|%d|%d|%d|%d|%d|%d|%d|%u|%u|%d|%d|%d|%d|%u|%d|%d",
+                 klMode, ignOn ? 1 : 0, cdiOn ? 1 : 0, st, nearOk ? 1 : 0,
+                 rssiN ? (int)rssiEma : 0, neu, engineRunning ? 1 : 0, (int)rssiThr,
+                 wakeProf, lockProf, neutralReq ? 1 : 0, autoOff ? 1 : 0, hornIgn ? 1 : 0, warnFar ? 1 : 0,
+                 tamperCount, pairingActive() ? 1 : 0, calibUntil ? 1 : 0);
+  } else if (forceStatus || (frameN % 15) == 2) {   // status pengaturan
     forceStatus = false;
     n = snprintf(buf, sizeof(buf), "S|%u|%d|%u|%d|%u|%d", brightPct, fhnEnabled ? 1 : 0,
                  fhnProfile, fhnKeySet ? 1 : 0, parkMin, pinStr[0] ? 1 : 0);
-    infoTick++;
-  } else if (++infoTick >= 5) {                  // tiap ~5 dtk: kirim teks idle ("I|nama|baris2")
-    infoTick = 0;
+  } else if ((frameN % 15) == 8) {               // teks idle
     n = snprintf(buf, sizeof(buf), "I|%s|%s", idleName, idleLine2);
-  } else {                                       // selain itu: telemetri CSV
+  } else {                                       // telemetri CSV
     n = snprintf(buf, sizeof(buf), "%.2f,%d,%lu",
                  batteryVoltage, engineRunning ? 1 : 0, totalEngineSec);
   }
@@ -941,22 +1518,38 @@ void notifyTelemetry(unsigned long now) {
   pTxChar->notify();
 }
 
+// ============ LAYAR KHUSUS ============
+void drawPairing(unsigned long now) {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_helvB10_tr);
+  drawCentered("PAIRING", 14);
+  char pin[12];
+  snprintf(pin, sizeof(pin), "%06lu", (unsigned long)pairPin);
+  u8g2.setFont(u8g2_font_helvB18_tr);
+  drawCentered(pin, 44);
+  u8g2.setFont(u8g2_font_5x7_tr);
+  char t[32];
+  long left = (long)(pairUntil - now) / 1000;
+  snprintf(t, sizeof(t), "Ketik PIN ini di HP  (%lds)", left < 0 ? 0L : left);
+  drawCentered(t, 60);
+  u8g2.sendBuffer();
+}
+
+void drawAlarm(unsigned long now) {
+  u8g2.clearBuffer();
+  bool inv = (now / 250) % 2;
+  if (inv) u8g2.drawBox(0, 0, 128, 64);
+  u8g2.setDrawColor(inv ? 0 : 1);
+  u8g2.setFont(u8g2_font_helvB18_tr);
+  drawCentered("ALARM!", 34);
+  u8g2.setFont(u8g2_font_5x7_tr);
+  drawCentered("KUNCI / MESIN TANPA IZIN", 54);
+  u8g2.setDrawColor(1);
+  u8g2.sendBuffer();
+}
+
 // ============ SETUP ============
-void setup() {
-  // bangun dari timer = siklus parkir: cek tegangan / beacon lalu tidur lagi (kembali hanya jika mesin hidup)
-  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER) parkedWake();
-
-  Serial.begin(115200);
-  delay(100);
-  setCpuFrequencyMhz(160);                   // lebih adem di dalam box motor
-
-  analogSetAttenuation(ADC_11db);
-  analogReadResolution(12);
-  pinMode(PIN_BOOT, INPUT_PULLUP);
-
-  memset(&nav, 0, sizeof(nav));
-
-  prefs.begin("glpro", false);
+void loadSettings() {
   totalEngineSec = prefs.getULong("engsec", 0);
   lastSavedSec   = totalEngineSec;
   brightPct   = (uint8_t)constrain((int)prefs.getUChar("bright", 100), 5, 100);
@@ -972,14 +1565,49 @@ void setup() {
     strncpy(pinStr, pn.c_str(), sizeof(pinStr) - 1);
     pinStr[sizeof(pinStr) - 1] = 0;
   }
+  klMode     = prefs.getUChar("kl_mode", 0) ? 1 : 0;
+  wakeProf   = (uint8_t)constrain((int)prefs.getUChar("kl_wp", 1), 0, 2);
+  lockProf   = (uint8_t)constrain((int)prefs.getUChar("kl_lk", 1), 0, 3);
+  neutralReq = prefs.getBool("kl_nr", true);
+  autoOff    = prefs.getBool("kl_ao", true);
+  hornIgn    = prefs.getBool("kl_hi", true);
+  warnFar    = prefs.getBool("kl_wf", true);
+  rssiThr    = prefs.getChar("rssi_thr", KL_NEAR_DEFAULT);
+  tamperCount = prefs.getUShort("tamper", 0);
+}
 
-  Wire.begin(PIN_SDA, PIN_SCL);
-  Wire.setClock(400000);
-  Wire.setTimeOut(50);                       // jangan hang jika I2C error
-  u8g2.begin();
-  u8g2.setBusClock(400000);
-  u8g2.setPowerSave(0);                      // bisa saja masih mode tidur setelah parkir
-  applyBrightness();
+void setup() {
+  // 1) PALING AWAL: semua relay mati, lalu pulihkan relay yang harus tetap hidup setelah reset mendadak
+  relaysInit();
+  esp_sleep_wakeup_cause_t wc = esp_sleep_get_wakeup_cause();
+  if (wc != ESP_SLEEP_WAKEUP_UNDEFINED) setCpuFrequencyMhz(80);   // siklus parkir: hemat arus
+  analogSetAttenuation(ADC_11db);
+  analogReadResolution(12);
+  pinMode(PIN_BOOT, INPUT_PULLUP);
+
+  prefs.begin("glpro", false);
+  loadSettings();
+
+  esp_reset_reason_t rr = esp_reset_reason();
+  bool warmReset = (rr == ESP_RST_BROWNOUT || rr == ESP_RST_PANIC || rr == ESP_RST_INT_WDT ||
+                    rr == ESP_RST_TASK_WDT || rr == ESP_RST_WDT || rr == ESP_RST_SW);
+  if (klMode == 1 && warmReset && prefs.getBool("ign_run", false)) {
+    // ESP ter-reset saat kontak ON (sedang jalan): kembalikan kontak + CDI segera, jangan matikan motor di jalan
+    rlyIgn(true); rlyCdi(true);
+    ignOn = true; ignAt = millis(); ignSawCharge = true;
+  } else {
+    prefs.putBool("ign_run", false);
+    if (klMode == 0 && keyBusHigh()) rlyCdi(true);   // manual: kunci sudah ON -> CDI hidup tanpa menunggu boot penuh
+  }
+
+  // 2) bangun dari deep sleep: siklus parkir. Kembali hanya bila ada alasan boot normal.
+  if (wc != ESP_SLEEP_WAKEUP_UNDEFINED) parkedWake(wc);
+
+  if (!quietWake) { Serial.begin(115200); delay(100); }
+  setCpuFrequencyMhz(quietWake ? 80 : 160);
+  enableLoopWDT();                                   // loop macet -> reset -> relay (termasuk starter) lepas
+
+  memset(&nav, 0, sizeof(nav));
 
   {
     String n  = prefs.getString("name", DEF_NAME);
@@ -992,34 +1620,24 @@ void setup() {
 
   updateVoltage();
   bootStart = millis();
-  drawBoot(0);                               // logo langsung tampil
+  if (quietWake) {
+    bootStart = millis() - BOOT_MS - 1;              // tanpa splash, OLED tidak dinyalakan
+  } else {
+    oledEnsure();
+    drawBoot(0);                                     // logo langsung tampil
+  }
 
   cmdQueue = xQueueCreate(6, sizeof(Msg));
 
-  // BLE
-  NimBLEDevice::init(DEVICE_NAME);
-  NimBLEDevice::setMTU(247);
-  NimBLEDevice::setPower(FIND_TX_DBM);
+  if (!bleReady) bleInitFull();
+  if (wc == ESP_SLEEP_WAKEUP_UNDEFINED && NimBLEDevice::getNumBonds() == 0)
+    startPairing(180000UL, false);                   // belum ada HP terpasang: buka pairing 3 menit
 
-  pServer = NimBLEDevice::createServer();
-  pServer->setCallbacks(new SrvCb());
-  pServer->advertiseOnDisconnect(false);     // iklan diatur advTick() (selang-seling dengan beacon Find Hub)
-
-  NimBLEService* svc = pServer->createService(SVC_UUID);
-
-  NimBLECharacteristic* pRx = svc->createCharacteristic(
-      RX_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
-  pRx->setCallbacks(new RxCb());
-
-  pTxChar = svc->createCharacteristic(TX_UUID, NIMBLE_PROPERTY::NOTIFY);
-
-  svc->start();
-  setAppAdv();
-  advSwitchAt = millis() + APP_SLOT_MS;
+  if (!bleConnected) { setAppAdv(); advSwitchAt = millis() + APP_SLOT_MS; }
 
   lastDispInit = millis();
   lastKeepAwake = millis();
-  Serial.println("[BOOT] ready");
+  if (!quietWake) Serial.println("[BOOT] ready");
 }
 
 // ============ LOOP ============
@@ -1033,6 +1651,7 @@ void loop() {
   }
 
   updateEngine(now);
+  klTick(now);
   processQueue();
   if (!bleConnected) speedActive = false;        // HP putus -> kembali ke layout tanpa speed
   notifyTelemetry(now);
@@ -1040,16 +1659,24 @@ void loop() {
   // iklan: selalu bisa ditemukan HP saat tidak terhubung + jadwal beacon Find Hub
   advTick(now);
 
-  // tombol BOOT: menahan = aktivitas; tahan 8 detik = hapus kunci + PIN pelacak
+  // tombol BOOT: tahan 1 dtk = nyalakan layar 8 dtk; 3 dtk = mode pairing (hapus semua HP lama);
+  // 10 dtk = hapus kunci + PIN pelacak
   static unsigned long btnSince = 0;
-  static bool btnWiped = false;
+  static bool btnPair = false, btnWiped = false;
   if (digitalRead(PIN_BOOT) == LOW) {
     lastKeepAwake = now;
     if (!btnSince) btnSince = now;
-    if (!btnWiped && now - btnSince >= 8000) {
+    unsigned long held = now - btnSince;
+    if (held >= 1000) oledForceUntil = max(oledForceUntil, now + 8000);
+    if (!btnPair && held >= 3000) {
+      btnPair = true;
+      startPairing(KL_PAIR_MS, true);
+    }
+    if (!btnWiped && held >= 10000) {
       btnWiped = true;
       wipeTracker();
       forceStatus = true;
+      oledEnsure();
       u8g2.clearBuffer();
       u8g2.setFont(u8g2_font_helvB10_tr);
       drawCentered("TRACKER RESET", 36);
@@ -1058,16 +1685,28 @@ void loop() {
     }
   } else {
     btnSince = 0;
+    btnPair = false;
     btnWiped = false;
   }
 
-  // parkir: mesin mati (dan tidak sedang di-charge) + tidak ada aktivitas -> tidur dalam
+  // parkir: tak ada alasan tetap bangun + tak ada aktivitas -> tidur dalam
   bool boot0 = (now - bootStart) < BOOT_MS;
-  if (engineRunning || batteryVoltage >= V_WAKE_RUN) lastKeepAwake = now;
-  if (!boot0 && now - lastKeepAwake >= (unsigned long)parkMin * 60000UL) enterPark();
+  bool keyBus = keyBusHigh();
+  bool busy = engineRunning || (klMode == 0 && batteryVoltage >= V_WAKE_RUN) || keyBus || ignOn || ignRelayOn ||
+              spPh != SP_NONE || seqKind != SQ_NONE || pairingActive() || calibUntil;
+  if (busy) lastKeepAwake = now;
+  unsigned long idleLimit = (klMode == 1) ? (bleConnected ? KL_SESSION_IDLE_MS : KL_NO_SESSION_MS)
+                                          : (unsigned long)parkMin * 60000UL;
+  if (!boot0 && now - lastKeepAwake >= idleLimit) enterPark();
+
+  // OLED: keyless + kontak mati + sesi diam = padam total (hemat daya)
+  bool booting = boot0 && !quietWake;
+  bool wantOled = booting || klMode == 0 || ignOn || pairingActive() || seqKind == SQ_ALARM ||
+                  (long)(oledForceUntil - now) > 0;
+  if (wantOled) oledEnsure(); else oledOff();
 
   // re-init OLED tiap 30 dtk (pulih dari glitch tegangan/EMI)
-  if (now - lastDispInit >= 30000) {
+  if (oledOn && now - lastDispInit >= 30000) {
     lastDispInit = now;
     u8g2.initDisplay();
     u8g2.setPowerSave(0);
@@ -1076,19 +1715,25 @@ void loop() {
   }
 
   // render
-  bool booting = (now - bootStart) < BOOT_MS;
-  unsigned long interval = booting ? 40 : (idleDisplay ? 60 : (displayMode == 2 ? 100 : 250));
-  if (now - lastDraw >= interval) {
-    lastDraw = now;
-    if (booting) {
-      drawBoot(now - bootStart);
-    } else if (idleDisplay) {
-      drawIdle(now);
-    } else {
-      switch (displayMode) {
-        case 0: drawVoltage(); break;
-        case 1: drawTime();    break;
-        case 2: drawNav();     break;
+  if (oledOn) {
+    unsigned long interval = booting ? 40 : (idleDisplay ? 60 : (displayMode == 2 ? 100 : 250));
+    if (pairingActive() || seqKind == SQ_ALARM) interval = 100;
+    if (now - lastDraw >= interval) {
+      lastDraw = now;
+      if (booting) {
+        drawBoot(now - bootStart);
+      } else if (seqKind == SQ_ALARM) {
+        drawAlarm(now);
+      } else if (pairingActive()) {
+        drawPairing(now);
+      } else if (idleDisplay) {
+        drawIdle(now);
+      } else {
+        switch (displayMode) {
+          case 0: drawVoltage(); break;
+          case 1: drawTime();    break;
+          case 2: drawNav();     break;
+        }
       }
     }
   }

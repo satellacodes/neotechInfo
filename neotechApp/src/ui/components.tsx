@@ -73,7 +73,11 @@ export function Button({
   style?: StyleProp<ViewStyle>;
 }) {
   const bg =
-    variant === "primary" ? C.accent : variant === "danger" ? "#7f1d1d" : C.surface2;
+    variant === "primary"
+      ? C.accent
+      : variant === "danger"
+        ? "#7f1d1d"
+        : C.surface2;
   const fg = variant === "primary" ? "#04131f" : C.text;
   const off = disabled || loading;
   return (
@@ -125,15 +129,36 @@ export function Card({
 }
 
 /* ───────── Skeleton (fallback loading) ───────── */
-export function Skeleton({ w, h = 16, style }: { w?: number | `${number}%`; h?: number; style?: StyleProp<ViewStyle> }) {
+export function Skeleton({
+  w,
+  h = 16,
+  style,
+}: {
+  w?: number | `${number}%`;
+  h?: number;
+  style?: StyleProp<ViewStyle>;
+}) {
   const o = useSharedValue(0.35);
   useEffect(() => {
-    o.value = withRepeat(withTiming(0.8, { duration: 750, easing: Easing.inOut(Easing.ease) }), -1, true);
+    o.value = withRepeat(
+      withTiming(0.8, { duration: 750, easing: Easing.inOut(Easing.ease) }),
+      -1,
+      true,
+    );
   }, [o]);
   const st = useAnimatedStyle(() => ({ opacity: o.value }));
   return (
     <Animated.View
-      style={[{ width: w ?? "100%", height: h, borderRadius: R.sm, backgroundColor: C.surface2 }, st, style]}
+      style={[
+        {
+          width: w ?? "100%",
+          height: h,
+          borderRadius: R.sm,
+          backgroundColor: C.surface2,
+        },
+        st,
+        style,
+      ]}
     />
   );
 }
@@ -149,7 +174,13 @@ export function StatusPill({
   const o = useSharedValue(1);
   useEffect(() => {
     if (state === "busy") {
-      o.value = withRepeat(withSequence(withTiming(0.25, { duration: 500 }), withTiming(1, { duration: 500 })), -1);
+      o.value = withRepeat(
+        withSequence(
+          withTiming(0.25, { duration: 500 }),
+          withTiming(1, { duration: 500 }),
+        ),
+        -1,
+      );
     } else {
       o.value = withTiming(1, { duration: 200 });
     }
@@ -180,14 +211,21 @@ export function Segmented({
   useEffect(() => {
     x.value = withSpring(value * segW, { damping: 18, stiffness: 220 });
   }, [value, segW, x]);
-  const ind = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
-  const onLayout = useCallback((e: LayoutChangeEvent) => setW(e.nativeEvent.layout.width), []);
+  const ind = useAnimatedStyle(() => ({
+    transform: [{ translateX: x.value }],
+  }));
+  const onLayout = useCallback(
+    (e: LayoutChangeEvent) => setW(e.nativeEvent.layout.width),
+    [],
+  );
   return (
     <View style={s.seg} onLayout={onLayout}>
       {segW > 0 && <Animated.View style={[s.segInd, { width: segW }, ind]} />}
       {options.map((o, i) => (
         <Pressable key={o} style={s.segItem} onPress={() => onChange(i)}>
-          <Text style={[s.segTxt, value === i && { color: "#04131f" }]}>{o}</Text>
+          <Text style={[s.segTxt, value === i && { color: "#04131f" }]}>
+            {o}
+          </Text>
         </Pressable>
       ))}
     </View>
@@ -197,7 +235,11 @@ export function Segmented({
 /* ───────── Toast ───────── */
 export type ToastKind = "ok" | "err" | "info";
 export function useToast() {
-  const [t, setT] = useState<{ id: number; msg: string; kind: ToastKind } | null>(null);
+  const [t, setT] = useState<{
+    id: number;
+    msg: string;
+    kind: ToastKind;
+  } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const show = useCallback((msg: string, kind: ToastKind = "info") => {
     if (timer.current) clearTimeout(timer.current);
@@ -217,7 +259,10 @@ export function useToast() {
       exiting={FadeOutDown.duration(180)}
       style={[
         s.toast,
-        { borderColor: t.kind === "ok" ? C.ok : t.kind === "err" ? C.danger : C.border },
+        {
+          borderColor:
+            t.kind === "ok" ? C.ok : t.kind === "err" ? C.danger : C.border,
+        },
       ]}
       pointerEvents="none"
     >
@@ -228,10 +273,19 @@ export function useToast() {
 }
 
 /* ───────── Collapsible ───────── */
-export function Collapsible({ open, children }: { open: boolean; children: React.ReactNode }) {
+export function Collapsible({
+  open,
+  children,
+}: {
+  open: boolean;
+  children: React.ReactNode;
+}) {
   if (!open) return null;
   return (
-    <Animated.View entering={FadeIn.duration(220)} exiting={FadeOut.duration(140)}>
+    <Animated.View
+      entering={FadeIn.duration(220)}
+      exiting={FadeOut.duration(140)}
+    >
       {children}
     </Animated.View>
   );
@@ -254,7 +308,10 @@ export class ErrorBoundary extends React.Component<
         <Text style={[T.small, { marginVertical: S.md, textAlign: "center" }]}>
           {String(this.state.err.message)}
         </Text>
-        <Button label="Coba lagi" onPress={() => this.setState({ err: null })} />
+        <Button
+          label="Coba lagi"
+          onPress={() => this.setState({ err: null })}
+        />
       </View>
     );
   }
@@ -278,7 +335,11 @@ const s = StyleSheet.create({
     marginBottom: S.lg,
     gap: S.md,
   },
-  cardHead: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  cardHead: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
   pill: {
     flexDirection: "row",
     alignItems: "center",
@@ -319,6 +380,16 @@ const s = StyleSheet.create({
     paddingVertical: S.md,
     paddingHorizontal: S.lg,
   },
-  toastTxt: { color: C.text, fontSize: 14, fontWeight: "600", textAlign: "center" },
-  center: { flex: 1, alignItems: "center", justifyContent: "center", padding: S.xl },
+  toastTxt: {
+    color: C.text,
+    fontSize: 14,
+    fontWeight: "600",
+    textAlign: "center",
+  },
+  center: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: S.xl,
+  },
 });

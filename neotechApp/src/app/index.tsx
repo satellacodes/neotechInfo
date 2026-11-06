@@ -38,6 +38,7 @@ import {
   StatusPill,
   useToast,
 } from "../ui/components";
+import { KL_ERRORS, KeylessPanel } from "../keyless/KeylessPanel";
 import { AppSlider } from "../ui/slider";
 import { C, R, S, T } from "../ui/theme";
 
@@ -177,7 +178,11 @@ function Screen() {
   }, [ble.findProf]);
   useEffect(() => {
     const e = ble.fwError;
-    if (e) show(FW_ERRORS[e.code] ?? `Galat dari ESP32: ${e.code}`, "err");
+    if (e)
+      show(
+        FW_ERRORS[e.code] ?? KL_ERRORS[e.code] ?? `Galat dari ESP32: ${e.code}`,
+        "err",
+      );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ble.fwError?.at]);
   useEffect(() => {
@@ -457,6 +462,9 @@ function Screen() {
             onPress={() => (connected ? stopAutoConnect() : startAutoConnect())}
           />
         </Card>
+
+        {/* KEYLESS */}
+        <KeylessPanel ble={ble} show={show} connected={connected} />
 
         {/* MODE */}
         <Card title="Mode display" index={1}>

@@ -2,7 +2,7 @@
   "expo": {
     "name": "neotechApp",
     "slug": "neotechApp",
-    "version": "1.2.0",
+    "version": "2.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "neotechapp",
@@ -25,7 +25,8 @@
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.BLUETOOTH",
-        "android.permission.BLUETOOTH_ADMIN"
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.POST_NOTIFICATIONS"
       ],
       "package": "com.semangka.neotechApp"
     },
@@ -60,7 +61,8 @@
           "locationWhenInUsePermission": "Butuh lokasi untuk menampilkan kecepatan di display motor."
         }
       ],
-      "./plugins/withNotificationListener"
+      "./plugins/withNotificationListener",
+      "expo-notifications"
     ],
     "experiments": {
       "typedRoutes": true,

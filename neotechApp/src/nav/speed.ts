@@ -25,7 +25,12 @@ export interface SpeedState {
   error: string | null;
 }
 
-let state: SpeedState = { running: false, kmh: null, accuracy: null, error: null };
+let state: SpeedState = {
+  running: false,
+  kmh: null,
+  accuracy: null,
+  error: null,
+};
 const listeners = new Set<() => void>();
 function set(p: Partial<SpeedState>) {
   state = { ...state, ...p };
@@ -38,7 +43,11 @@ function subscribe(l: () => void) {
   };
 }
 export function useSpeed(): SpeedState {
-  return useSyncExternalStore(subscribe, () => state, () => state);
+  return useSyncExternalStore(
+    subscribe,
+    () => state,
+    () => state,
+  );
 }
 
 // ---------- pengolahan sampel GPS ----------
@@ -81,7 +90,9 @@ if (Platform.OS === "android") {
       set({ error: error.message });
       return;
     }
-    const locations = (data as { locations?: Location.LocationObject[] } | undefined)?.locations;
+    const locations = (
+      data as { locations?: Location.LocationObject[] } | undefined
+    )?.locations;
     if (locations?.length) onLocations(locations);
   });
 }
@@ -100,7 +111,8 @@ export async function syncSpeedRunning() {
 export async function startSpeed(): Promise<{ ok: boolean; msg?: string }> {
   try {
     const fg = await Location.requestForegroundPermissionsAsync();
-    if (fg.status !== "granted") return { ok: false, msg: "Izin lokasi ditolak" };
+    if (fg.status !== "granted")
+      return { ok: false, msg: "Izin lokasi ditolak" };
 
     if (!(await Location.hasServicesEnabledAsync()))
       return { ok: false, msg: "Aktifkan Lokasi/GPS di HP dulu" };

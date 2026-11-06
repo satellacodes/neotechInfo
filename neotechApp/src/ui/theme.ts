@@ -20,7 +20,12 @@ export const R = { sm: 8, md: 12, lg: 16, pill: 999 } as const;
 
 export const T = {
   title: { fontSize: 24, fontWeight: "800" as const, color: C.text },
-  h: { fontSize: 13, fontWeight: "700" as const, color: C.sub, letterSpacing: 0.8 },
+  h: {
+    fontSize: 13,
+    fontWeight: "700" as const,
+    color: C.sub,
+    letterSpacing: 0.8,
+  },
   body: { fontSize: 14, color: C.text },
   small: { fontSize: 12, color: C.sub },
   big: { fontSize: 34, fontWeight: "800" as const },

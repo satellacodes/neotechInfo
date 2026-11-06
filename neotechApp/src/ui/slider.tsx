@@ -1,5 +1,10 @@
 import React, { useRef, useState } from "react";
-import { LayoutChangeEvent, PanResponder, StyleSheet, View } from "react-native";
+import {
+  LayoutChangeEvent,
+  PanResponder,
+  StyleSheet,
+  View,
+} from "react-native";
 
 import { C } from "./theme";
 
@@ -65,7 +70,11 @@ export function AppSlider({
   };
 
   return (
-    <View style={[st.hit, disabled && { opacity: 0.5 }]} onLayout={onLayout} {...pan.panHandlers}>
+    <View
+      style={[st.hit, disabled && { opacity: 0.5 }]}
+      onLayout={onLayout}
+      {...pan.panHandlers}
+    >
       <View style={st.track} pointerEvents="none">
         <View style={[st.fill, { width: f * w }]} />
       </View>
@@ -76,7 +85,12 @@ export function AppSlider({
 
 const st = StyleSheet.create({
   hit: { height: 40, justifyContent: "center" },
-  track: { height: 8, borderRadius: 4, backgroundColor: C.surface2, overflow: "hidden" },
+  track: {
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: C.surface2,
+    overflow: "hidden",
+  },
   fill: { height: 8, backgroundColor: C.accent },
   thumb: {
     position: "absolute",
