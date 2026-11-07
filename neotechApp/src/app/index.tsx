@@ -14,19 +14,9 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeIn } from "react-native-reanimated";
 
-import {
-  sendJson,
-  startAutoConnect,
-  stopAutoConnect,
-  useBle,
-} from "../ble/ble";
+import { sendJson, startAutoConnect, stopAutoConnect, useBle } from "../ble/ble";
 import { setAutoNav, useNavDebug } from "../nav/controller";
-import {
-  startSpeed,
-  stopSpeed,
-  syncSpeedRunning,
-  useSpeed,
-} from "../nav/speed";
+import { startSpeed, stopSpeed, syncSpeedRunning, useSpeed } from "../nav/speed";
 import {
   Button,
   Card,
@@ -48,16 +38,8 @@ const NAME_MAX = 16;
 const LINE2_MAX = 24;
 
 const ARROWS = [
-  "straight",
-  "left",
-  "right",
-  "slight-left",
-  "slight-right",
-  "sharp-left",
-  "sharp-right",
-  "uturn",
-  "roundabout",
-  "arrive",
+  "straight", "left", "right", "slight-left", "slight-right",
+  "sharp-left", "sharp-right", "uturn", "roundabout", "arrive",
 ] as const;
 
 let NotifListener: any = null;
@@ -178,11 +160,7 @@ function Screen() {
   }, [ble.findProf]);
   useEffect(() => {
     const e = ble.fwError;
-    if (e)
-      show(
-        FW_ERRORS[e.code] ?? KL_ERRORS[e.code] ?? `Galat dari ESP32: ${e.code}`,
-        "err",
-      );
+    if (e) show(FW_ERRORS[e.code] ?? KL_ERRORS[e.code] ?? `Galat dari ESP32: ${e.code}`, "err");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ble.fwError?.at]);
   useEffect(() => {
@@ -243,8 +221,7 @@ function Screen() {
     brightDirty.current = false;
   };
 
-  const setParkMin = (i: number) =>
-    send({ cmd: "park", min: PARK_OPTIONS[i] }, "Waktu tidur diatur");
+  const setParkMin = (i: number) => send({ cmd: "park", min: PARK_OPTIONS[i] }, "Waktu tidur diatur");
 
   // ---- Find Hub ----
   const cleanKey = keyText.replace(/[^0-9a-fA-F]/g, "");
@@ -253,37 +230,22 @@ function Screen() {
 
   const installKey = async () => {
     if (!keyValid) return show("Kunci harus 40 karakter hex (0-9, a-f)", "err");
-    if (!pinValid)
-      return show(
-        ble.pinSet ? "Masukkan PIN pelacak" : "Buat PIN 4–8 digit angka",
-        "err",
-      );
+    if (!pinValid) return show(ble.pinSet ? "Masukkan PIN pelacak" : "Buat PIN 4–8 digit angka", "err");
     setFindBusy(true);
-    const ok = await send(
-      { cmd: "find_key", key: cleanKey.toLowerCase(), pin },
-      "Kunci dipasang ✓ — sekarang aktifkan pelacak",
-    );
+    const ok = await send({ cmd: "find_key", key: cleanKey.toLowerCase(), pin }, "Kunci dipasang ✓ — sekarang aktifkan pelacak");
     if (ok) setKeyText("");
     setFindBusy(false);
   };
   const toggleFind = async (on: boolean) => {
     if (!pinValid) return show("Masukkan PIN pelacak dulu", "err");
     setFindBusy(true);
-    await send(
-      { cmd: "find", en: on ? 1 : 0, prof: profSel, pin },
-      on ? "Pelacak diaktifkan" : "Pelacak dimatikan",
-    );
+    await send({ cmd: "find", en: on ? 1 : 0, prof: profSel, pin }, on ? "Pelacak diaktifkan" : "Pelacak dimatikan");
     setFindBusy(false);
   };
   const changeProfile = (i: number) => {
     setProfSel(i);
-    if (ble.findKey && pinValid)
-      send(
-        { cmd: "find", en: ble.findOn ? 1 : 0, prof: i, pin },
-        "Profil diubah",
-      );
-    else if (ble.findKey)
-      show("Masukkan PIN agar profil tersimpan di ESP32", "info");
+    if (ble.findKey && pinValid) send({ cmd: "find", en: ble.findOn ? 1 : 0, prof: i, pin }, "Profil diubah");
+    else if (ble.findKey) show("Masukkan PIN agar profil tersimpan di ESP32", "info");
   };
   const clearFind = () => {
     if (!pinValid) return show("Masukkan PIN pelacak dulu", "err");
@@ -302,10 +264,7 @@ function Screen() {
     const l = toLabel(line2).trim() || DEF_LINE2;
     setName(n);
     setLine2(l);
-    const ok = await send(
-      { cmd: "idle_text", name: n, line2: l },
-      "Tersimpan di display ✓",
-    );
+    const ok = await send({ cmd: "idle_text", name: n, line2: l }, "Tersimpan di display ✓");
     if (ok) dirty.current = false;
     setSaving(false);
   };
@@ -317,10 +276,7 @@ function Screen() {
   };
 
   const sendNav = () => {
-    send(
-      { cmd: "nav", arrow, distance, street, eta, go: 1, auto: 0 },
-      "Navigasi terkirim",
-    );
+    send({ cmd: "nav", arrow, distance, street, eta, go: 1, auto: 0 }, "Navigasi terkirim");
     setMode(2);
   };
 
@@ -343,10 +299,7 @@ function Screen() {
   const pill = connected
     ? { st: "ok" as const, tx: "Terhubung" }
     : busy
-      ? {
-          st: "busy" as const,
-          tx: ble.link === "scanning" ? "Mencari..." : "Menyambung...",
-        }
+      ? { st: "busy" as const, tx: ble.link === "scanning" ? "Mencari..." : "Menyambung..." }
       : { st: "off" as const, tx: "Terputus" };
 
   const eng = fmtEngine(ble.engineSec);
@@ -404,11 +357,7 @@ function Screen() {
               <View style={st.tile}>
                 <Text style={T.small}>Tegangan aki</Text>
                 {hasData ? (
-                  <Animated.Text
-                    key="v"
-                    entering={FadeIn.duration(250)}
-                    style={[T.big, { color: vs!.c }]}
-                  >
+                  <Animated.Text key="v" entering={FadeIn.duration(250)} style={[T.big, { color: vs!.c }]}>
                     {ble.voltage!.toFixed(2)}
                     <Text style={st.unit}> V</Text>
                   </Animated.Text>
@@ -424,11 +373,7 @@ function Screen() {
               <View style={st.tile}>
                 <Text style={T.small}>Waktu mesin hidup</Text>
                 {eng ? (
-                  <Animated.Text
-                    key="e"
-                    entering={FadeIn.duration(250)}
-                    style={[T.big, { color: C.accent }]}
-                  >
+                  <Animated.Text key="e" entering={FadeIn.duration(250)} style={[T.big, { color: C.accent }]}>
                     {eng.h}
                     <Text style={st.unit}>j </Text>
                     {String(eng.m).padStart(2, "0")}
@@ -438,9 +383,7 @@ function Screen() {
                   <Skeleton w={110} h={38} style={{ marginVertical: 4 }} />
                 )}
                 {eng ? (
-                  <Text
-                    style={[st.badge, { color: ble.engineOn ? C.ok : C.sub }]}
-                  >
+                  <Text style={[st.badge, { color: ble.engineOn ? C.ok : C.sub }]}>
                     {ble.engineOn ? "Mesin ON" : "Mesin OFF"}
                   </Text>
                 ) : (
@@ -450,13 +393,7 @@ function Screen() {
             </View>
           )}
           <Button
-            label={
-              connected
-                ? "Putuskan"
-                : busy
-                  ? "Menghubungkan..."
-                  : "Hubungkan ke ESP32"
-            }
+            label={connected ? "Putuskan" : busy ? "Menghubungkan..." : "Hubungkan ke ESP32"}
             variant={connected ? "ghost" : "primary"}
             loading={busy}
             onPress={() => (connected ? stopAutoConnect() : startAutoConnect())}
@@ -468,27 +405,15 @@ function Screen() {
 
         {/* MODE */}
         <Card title="Mode display" index={1}>
-          <Segmented
-            options={["Tegangan", "Waktu", "Navigasi"]}
-            value={mode}
-            onChange={changeMode}
-          />
-          <Button
-            label="Tampilkan layar idle"
-            variant="ghost"
-            onPress={() => send({ cmd: "idle" })}
-          />
+          <Segmented options={["Tegangan", "Waktu", "Navigasi"]} value={mode} onChange={changeMode} />
+          <Button label="Tampilkan layar idle" variant="ghost" onPress={() => send({ cmd: "idle" })} />
         </Card>
 
         {/* KECERAHAN */}
         <Card
           title="Kecerahan layar"
           index={2}
-          right={
-            <Text style={[T.small, { fontWeight: "700", color: C.accent }]}>
-              {bright}%
-            </Text>
-          }
+          right={<Text style={[T.small, { fontWeight: "700", color: C.accent }]}>{bright}%</Text>}
         >
           <AppSlider
             value={bright}
@@ -511,8 +436,7 @@ function Screen() {
             ))}
           </View>
           <Text style={T.small}>
-            Tersimpan di ESP32, jadi tetap berlaku setiap motor dinyalakan.
-            Layar lebih redup = lebih hemat daya dan nyaman di malam hari.
+            Tersimpan di ESP32, jadi tetap berlaku setiap motor dinyalakan. Layar lebih redup = lebih hemat daya dan nyaman di malam hari.
           </Text>
         </Card>
 
@@ -539,9 +463,7 @@ function Screen() {
                 setName(v);
               }}
             />
-            <Text style={st.count}>
-              {name.length}/{NAME_MAX}
-            </Text>
+            <Text style={st.count}>{name.length}/{NAME_MAX}</Text>
           </View>
           <View>
             <Text style={st.lbl}>Teks kedua</Text>
@@ -556,27 +478,13 @@ function Screen() {
                 setLine2(v);
               }}
             />
-            <Text style={st.count}>
-              {line2.length}/{LINE2_MAX}
-            </Text>
+            <Text style={st.count}>{line2.length}/{LINE2_MAX}</Text>
           </View>
           <View style={st.row}>
-            <Button
-              label="Default"
-              variant="ghost"
-              onPress={resetIdle}
-              style={{ flex: 1 }}
-            />
-            <Button
-              label="Tulis ke display"
-              loading={saving}
-              onPress={writeIdle}
-              style={{ flex: 2 }}
-            />
+            <Button label="Default" variant="ghost" onPress={resetIdle} style={{ flex: 1 }} />
+            <Button label="Tulis ke display" loading={saving} onPress={writeIdle} style={{ flex: 2 }} />
           </View>
-          <Text style={T.small}>
-            Hanya huruf, angka, dan tanda baca standar (aksen otomatis dibuang).
-          </Text>
+          <Text style={T.small}>Hanya huruf, angka, dan tanda baca standar (aksen otomatis dibuang).</Text>
         </Card>
 
         {/* NAV OTOMATIS */}
@@ -593,38 +501,22 @@ function Screen() {
             </View>
             <View style={st.between}>
               <Text style={T.small}>Akses notifikasi</Text>
-              <Text
-                style={{
-                  color: notifPerm === "authorized" ? C.ok : C.danger,
-                  fontWeight: "700",
-                  fontSize: 12,
-                }}
-              >
+              <Text style={{ color: notifPerm === "authorized" ? C.ok : C.danger, fontWeight: "700", fontSize: 12 }}>
                 {notifPerm === "authorized" ? "Aktif" : "Belum diberikan"}
               </Text>
             </View>
             {notifPerm !== "authorized" && (
-              <Button
-                label="Beri akses notifikasi"
-                onPress={() => NotifListener?.requestPermission()}
-              />
+              <Button label="Beri akses notifikasi" onPress={() => NotifListener?.requestPermission()} />
             )}
-            <PressableScale
-              onPress={() => setShowDebug((v) => !v)}
-              style={st.link}
-            >
-              <Text style={st.linkTxt}>
-                {showDebug ? "Sembunyikan debug" : "Lihat debug notifikasi"}
-              </Text>
+            <PressableScale onPress={() => setShowDebug((v) => !v)} style={st.link}>
+              <Text style={st.linkTxt}>{showDebug ? "Sembunyikan debug" : "Lihat debug notifikasi"}</Text>
             </PressableScale>
             <Collapsible open={showDebug}>
               <Text style={st.lbl}>Diagnosa</Text>
               <Text style={st.mono}>
                 {`notif diterima (semua app): ${nav.totalSeen}\nterakhir dari : ${nav.lastApp}\nnotif Maps lolos parse: ${nav.count}\nstatus terakhir: ${nav.lastResult}`}
               </Text>
-              <Text style={[st.lbl, { marginTop: S.md }]}>
-                Notifikasi Maps terakhir
-              </Text>
+              <Text style={[st.lbl, { marginTop: S.md }]}>Notifikasi Maps terakhir</Text>
               <Text style={st.mono}>{rawText}</Text>
               <Text style={[st.lbl, { marginTop: S.md }]}>Hasil parsing</Text>
               <Text style={st.mono}>
@@ -653,11 +545,7 @@ function Screen() {
               <View style={st.tile}>
                 <Text style={T.small}>Kecepatan saat ini</Text>
                 {speed.kmh != null ? (
-                  <Animated.Text
-                    key="spd"
-                    entering={FadeIn.duration(200)}
-                    style={[T.big, { color: C.accent }]}
-                  >
+                  <Animated.Text key="spd" entering={FadeIn.duration(200)} style={[T.big, { color: C.accent }]}>
                     {speed.kmh}
                     <Text style={st.unit}> km/h</Text>
                   </Animated.Text>
@@ -665,21 +553,13 @@ function Screen() {
                   <Skeleton w={110} h={38} style={{ marginVertical: 4 }} />
                 )}
                 <Text style={T.small}>
-                  {speed.accuracy != null
-                    ? `Akurasi GPS ±${Math.round(speed.accuracy)} m`
-                    : "Menunggu sinyal GPS..."}
+                  {speed.accuracy != null ? `Akurasi GPS ±${Math.round(speed.accuracy)} m` : "Menunggu sinyal GPS..."}
                 </Text>
               </View>
             )}
-            {speed.error ? (
-              <Text style={{ color: C.danger, fontSize: 12 }}>
-                {speed.error}
-              </Text>
-            ) : null}
+            {speed.error ? <Text style={{ color: C.danger, fontSize: 12 }}>{speed.error}</Text> : null}
             <Text style={T.small}>
-              Nyalakan saat app terbuka. Notifikasi "Kecepatan GPS aktif" akan
-              muncul — itu yang menjaga GPS tetap jalan saat Google Maps di
-              layar depan. Izin lokasi biasa sudah cukup.
+              Nyalakan saat app terbuka. Notifikasi "Kecepatan GPS aktif" akan muncul — itu yang menjaga GPS tetap jalan saat Google Maps di layar depan. Izin lokasi biasa sudah cukup.
             </Text>
           </Card>
         )}
@@ -689,33 +569,19 @@ function Screen() {
           title="Pelacak Find Hub"
           index={5}
           right={
-            <Text
-              style={[
-                T.small,
-                { fontWeight: "700", color: ble.findOn ? C.ok : C.sub },
-              ]}
-            >
-              {ble.findKey == null
-                ? "—"
-                : ble.findOn
-                  ? "AKTIF"
-                  : ble.findKey
-                    ? "MATI"
-                    : "BELUM ADA KUNCI"}
+            <Text style={[T.small, { fontWeight: "700", color: ble.findOn ? C.ok : C.sub }]}>
+              {ble.findKey == null ? "—" : ble.findOn ? "AKTIF" : ble.findKey ? "MATI" : "BELUM ADA KUNCI"}
             </Text>
           }
         >
           <Text style={T.small}>
-            ESP32 memancarkan beacon BLE yang dikenali jaringan Find Hub. HP
-            Android di sekitar motor yang sedang lewat akan melaporkan lokasinya
-            (terenkripsi) ke akun Google Anda. Beacon hanya dipancarkan saat HP
-            Anda tidak terhubung ke display.
+            ESP32 memancarkan beacon BLE yang dikenali jaringan Find Hub. HP Android di sekitar motor yang sedang lewat
+            akan melaporkan lokasinya (terenkripsi) ke akun Google Anda. Beacon hanya dipancarkan saat HP Anda tidak
+            terhubung ke display.
           </Text>
 
           <View>
-            <Text style={st.lbl}>
-              PIN pelacak {ble.pinSet === false ? "(buat baru, 4–8 angka)" : ""}
-            </Text>
+            <Text style={st.lbl}>PIN pelacak {ble.pinSet === false ? "(buat baru, 4–8 angka)" : ""}</Text>
             <TextInput
               style={st.input}
               value={pin}
@@ -739,17 +605,9 @@ function Screen() {
           </View>
 
           <View>
-            <Text style={st.lbl}>
-              Seberapa sering beacon dipancarkan saat parkir
-            </Text>
-            <Segmented
-              options={FIND_PROFILES.map((p) => p.name)}
-              value={profSel}
-              onChange={changeProfile}
-            />
-            <Text style={[T.small, { marginTop: S.sm }]}>
-              {FIND_PROFILES[profSel].desc}
-            </Text>
+            <Text style={st.lbl}>Seberapa sering beacon dipancarkan saat parkir</Text>
+            <Segmented options={FIND_PROFILES.map((p) => p.name)} value={profSel} onChange={changeProfile} />
+            <Text style={[T.small, { marginTop: S.sm }]}>{FIND_PROFILES[profSel].desc}</Text>
           </View>
 
           <View>
@@ -760,11 +618,7 @@ function Screen() {
               onChangeText={setKeyText}
               autoCapitalize="none"
               autoCorrect={false}
-              placeholder={
-                ble.findKey
-                  ? "Kunci sudah terpasang — tempel untuk mengganti"
-                  : "tempel dari skrip main.py"
-              }
+              placeholder={ble.findKey ? "Kunci sudah terpasang — tempel untuk mengganti" : "tempel dari skrip main.py"}
               placeholderTextColor={C.sub}
             />
             <Text style={st.count}>{cleanKey.length}/40</Text>
@@ -786,13 +640,8 @@ function Screen() {
             />
           </View>
 
-          <PressableScale
-            onPress={() => setShowFindHelp((v) => !v)}
-            style={st.link}
-          >
-            <Text style={st.linkTxt}>
-              {showFindHelp ? "Tutup panduan" : "Cara mendapatkan kunci"}
-            </Text>
+          <PressableScale onPress={() => setShowFindHelp((v) => !v)} style={st.link}>
+            <Text style={st.linkTxt}>{showFindHelp ? "Tutup panduan" : "Cara mendapatkan kunci"}</Text>
           </PressableScale>
           <Collapsible open={showFindHelp}>
             <Text style={st.mono}>
@@ -806,29 +655,20 @@ function Screen() {
           <Text style={st.lbl}>Display tidur setelah mesin mati</Text>
           <Segmented
             options={PARK_OPTIONS.map((m) => `${m} mnt`)}
-            value={Math.max(
-              0,
-              PARK_OPTIONS.indexOf((ble.parkMin ?? 3) as 1 | 3 | 10),
-            )}
+            value={Math.max(0, PARK_OPTIONS.indexOf((ble.parkMin ?? 3) as 1 | 3 | 10))}
             onChange={setParkMin}
           />
           <Text style={T.small}>
-            Saat tidur, layar mati dan koneksi app terputus; ESP32 bangun tiap
-            ±10 detik untuk memeriksa mesin. Nyalakan mesin (atau tekan tombol
-            BOOT) untuk membangunkannya. Pelacak Find Hub tetap bekerja selama
-            tegangan aki di atas 11,8 V.
+            Saat tidur, layar mati dan koneksi app terputus; ESP32 bangun tiap ±10 detik untuk memeriksa mesin. Nyalakan
+            mesin (atau tekan tombol BOOT) untuk membangunkannya. Pelacak Find Hub tetap bekerja selama tegangan aki di
+            atas 11,8 V.
           </Text>
         </Card>
 
         {/* MANUAL */}
         <Card title="Tes navigasi manual" index={5}>
-          <PressableScale
-            onPress={() => setShowManual((v) => !v)}
-            style={st.link}
-          >
-            <Text style={st.linkTxt}>
-              {showManual ? "Tutup" : "Buka form tes"}
-            </Text>
+          <PressableScale onPress={() => setShowManual((v) => !v)} style={st.link}>
+            <Text style={st.linkTxt}>{showManual ? "Tutup" : "Buka form tes"}</Text>
           </PressableScale>
           <Collapsible open={showManual}>
             <View style={{ gap: S.md }}>
@@ -839,35 +679,13 @@ function Screen() {
                     onPress={() => setArrow(a)}
                     style={[st.chip, arrow === a && st.chipOn]}
                   >
-                    <Text
-                      style={[st.chipTxt, arrow === a && { color: "#04131f" }]}
-                    >
-                      {a}
-                    </Text>
+                    <Text style={[st.chipTxt, arrow === a && { color: "#04131f" }]}>{a}</Text>
                   </PressableScale>
                 ))}
               </ScrollView>
-              <TextInput
-                style={st.input}
-                value={distance}
-                onChangeText={setDistance}
-                placeholder="150 m"
-                placeholderTextColor={C.sub}
-              />
-              <TextInput
-                style={st.input}
-                value={street}
-                onChangeText={setStreet}
-                placeholder="Nama jalan"
-                placeholderTextColor={C.sub}
-              />
-              <TextInput
-                style={st.input}
-                value={eta}
-                onChangeText={setEta}
-                placeholder="14:32"
-                placeholderTextColor={C.sub}
-              />
+              <TextInput style={st.input} value={distance} onChangeText={setDistance} placeholder="150 m" placeholderTextColor={C.sub} />
+              <TextInput style={st.input} value={street} onChangeText={setStreet} placeholder="Nama jalan" placeholderTextColor={C.sub} />
+              <TextInput style={st.input} value={eta} onChangeText={setEta} placeholder="14:32" placeholderTextColor={C.sub} />
               <Button label="Kirim navigasi" onPress={sendNav} />
             </View>
           </Collapsible>
@@ -883,8 +701,7 @@ function Screen() {
         </Card>
 
         <Text style={[T.small, { textAlign: "center", lineHeight: 18 }]}>
-          Tips: set baterai neotechApp ke "Tidak dibatasi" agar koneksi BLE
-          tidak diputus Android saat layar mati.
+          Tips: set baterai neotechApp ke "Tidak dibatasi" agar koneksi BLE tidak diputus Android saat layar mati.
         </Text>
       </ScrollView>
       {toast}
@@ -903,27 +720,11 @@ export default function App() {
 const st = StyleSheet.create({
   header: { flexDirection: "row", alignItems: "center", marginBottom: S.xl },
   row: { flexDirection: "row", gap: S.md },
-  between: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  tile: {
-    flex: 1,
-    backgroundColor: C.surface2,
-    borderRadius: R.md,
-    padding: S.md,
-    gap: 2,
-    minHeight: 104,
-  },
+  between: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  tile: { flex: 1, backgroundColor: C.surface2, borderRadius: R.md, padding: S.md, gap: 2, minHeight: 104 },
   unit: { fontSize: 16, color: C.sub, fontWeight: "600" },
   badge: { fontSize: 12, fontWeight: "700" },
-  empty: {
-    backgroundColor: C.surface2,
-    borderRadius: R.md,
-    padding: S.lg,
-    gap: S.xs,
-  },
+  empty: { backgroundColor: C.surface2, borderRadius: R.md, padding: S.lg, gap: S.xs },
   oled: {
     backgroundColor: C.oled,
     borderRadius: R.md,
@@ -934,18 +735,8 @@ const st = StyleSheet.create({
     alignItems: "center",
     gap: 6,
   },
-  oledName: {
-    color: C.oledText,
-    fontSize: 24,
-    fontWeight: "800",
-    maxWidth: "100%",
-  },
-  oledLine: {
-    color: C.oledText,
-    fontSize: 14,
-    opacity: 0.85,
-    maxWidth: "100%",
-  },
+  oledName: { color: C.oledText, fontSize: 24, fontWeight: "800", maxWidth: "100%" },
+  oledLine: { color: C.oledText, fontSize: 14, opacity: 0.85, maxWidth: "100%" },
   lbl: { color: C.sub, fontSize: 12, marginBottom: 6, fontWeight: "600" },
   count: { color: C.sub, fontSize: 11, textAlign: "right", marginTop: 4 },
   input: {
@@ -956,11 +747,7 @@ const st = StyleSheet.create({
     height: 48,
     fontSize: 15,
   },
-  mono: {
-    color: C.text,
-    fontSize: 12,
-    fontFamily: Platform.OS === "android" ? "monospace" : "Menlo",
-  },
+  mono: { color: C.text, fontSize: 12, fontFamily: Platform.OS === "android" ? "monospace" : "Menlo" },
   link: { alignSelf: "flex-start", paddingVertical: 4 },
   linkTxt: { color: C.accent, fontWeight: "700", fontSize: 13 },
   chip: {

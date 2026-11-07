@@ -4,12 +4,7 @@
  */
 import { useSyncExternalStore } from "react";
 import { ensureConnected, keepConnected, sendJson } from "../ble/ble";
-import {
-  MAPS_PKG,
-  NavInfo,
-  parseMapsNotification,
-  RawNotification,
-} from "./parser";
+import { MAPS_PKG, NavInfo, parseMapsNotification, RawNotification } from "./parser";
 
 export interface NavDebug {
   enabled: boolean;
@@ -49,11 +44,7 @@ function subscribe(l: () => void) {
   };
 }
 export function useNavDebug(): NavDebug {
-  return useSyncExternalStore(
-    subscribe,
-    () => state,
-    () => state,
-  );
+  return useSyncExternalStore(subscribe, () => state, () => state);
 }
 export function setAutoNav(on: boolean) {
   set({ enabled: on });

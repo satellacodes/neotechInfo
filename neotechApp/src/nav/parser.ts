@@ -65,19 +65,13 @@ function sideOf(t: string): "left" | "right" | null {
 export function detectArrow(text: string): NavArrow | null {
   const t = text.toLowerCase();
   if (/putar balik|u-?turn|balik arah/.test(t)) return "uturn";
-  if (/bundaran|bunderan|roundabout|traffic circle|rotary/.test(t))
-    return "roundabout";
-  if (
-    /tujuan anda|tujuan\b|destination|you have arrived|telah tiba|sudah sampai/.test(
-      t,
-    )
-  )
+  if (/bundaran|bunderan|roundabout|traffic circle|rotary/.test(t)) return "roundabout";
+  if (/tujuan anda|tujuan\b|destination|you have arrived|telah tiba|sudah sampai/.test(t))
     return "arrive";
 
   const side = sideOf(t);
   if (side) {
-    if (/tajam|sharp/.test(t))
-      return side === "left" ? "sharp-left" : "sharp-right";
+    if (/tajam|sharp/.test(t)) return side === "left" ? "sharp-left" : "sharp-right";
     if (/sedikit|serong|slight|\bbear\b|tetap|\bkeep\b/.test(t))
       return side === "left" ? "slight-left" : "slight-right";
     if (/\b(belok|turn)\b/.test(t)) return side;
@@ -85,23 +79,13 @@ export function detectArrow(text: string): NavArrow | null {
       return side === "left" ? "slight-left" : "slight-right";
     return side;
   }
-  if (
-    /lurus|terus|lanjut|continue|straight|\bhead\b|menuju|ikuti|follow/.test(t)
-  )
+  if (/lurus|terus|lanjut|continue|straight|\bhead\b|menuju|ikuti|follow/.test(t))
     return "straight";
   return null;
 }
 
 function collectLines(n: RawNotification): string[] {
-  const src = [
-    n.title,
-    n.titleBig,
-    n.text,
-    n.bigText,
-    n.subText,
-    n.summaryText,
-    n.extraInfoText,
-  ];
+  const src = [n.title, n.titleBig, n.text, n.bigText, n.subText, n.summaryText, n.extraInfoText];
   const out: string[] = [];
   for (const f of src) {
     if (!f) continue;
@@ -158,8 +142,7 @@ function findStreet(lines: string[], instr: string | undefined): string {
 }
 
 function findEta(lines: string[]): string {
-  const re =
-    /(?<![\d.,])(\d{1,2})[:.](\d{2})(?![\d.,])\s*(am|pm)?(?!\s*(?:km|m|mi)\b)/i;
+  const re = /(?<![\d.,])(\d{1,2})[:.](\d{2})(?![\d.,])\s*(am|pm)?(?!\s*(?:km|m|mi)\b)/i;
   for (const l of lines) {
     const m = l.match(re);
     if (!m) continue;
@@ -180,9 +163,7 @@ export function parseMapsNotification(n: RawNotification): NavInfo | null {
   if (lines.length === 0) return null;
 
   const instr = lines.find((l) => !TRIP.test(l) && detectArrow(l) !== null);
-  const arrow = (
-    instr ? detectArrow(instr) : detectArrow(lines.join(" | "))
-  ) as NavArrow | null;
+  const arrow = (instr ? detectArrow(instr) : detectArrow(lines.join(" | "))) as NavArrow | null;
   const distance = findDistance(lines);
   if (!arrow && !distance) return null;
 

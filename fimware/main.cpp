@@ -21,7 +21,7 @@
 #define PIN_R_IGN     25   // relay kontak: PARALEL dengan saklar kunci asli -> bus kontak dapat +12 V
 #define PIN_R_CDI     26   // relay daya CDI: SERI di kabel power CDI
 #define PIN_R_START   27   // relay tombol starter: PARALEL dengan tombol starter
-#define PIN_R_HORN    16   // relay tombol klakson: PARALEL dengan tombol klakson
+#define PIN_BUZZ      16   // buzzer aktif 3-24 V (sisi GND-nya lewat 1 MOSFET N low-side); pengganti klakson, tanpa relay
 #define PIN_R_TURN_L  17   // relay +12 V (sekring) ke kabel riting kiri
 #define PIN_R_TURN_R  18   // relay +12 V (sekring) ke kabel riting kanan
 // ---- KEYLESS: masukan ----
@@ -71,6 +71,7 @@
 #define KL_START_MIN_V      10.8f    // aki di bawah ini: starter ditolak
 #define V_START_DIP         11.2f    // tegangan turun di bawah ini = starter sedang menarik arus
 #define V_START_RECOVER     12.6f    // lalu pulih di atas ini = mesin sudah menyala
+#define KL_FAR_WARN_MS      6000UL   // HP/link hilang selama ini saat kontak ON -> kedip strobo pesawat
 #define KL_KILL_WARN_MS     5000UL   // peringatan riting sebelum mesin yang sedang jalan dimatikan
 #define KL_MOVING_KMH       15       // kill ditolak bila kecepatan GPS dari app di atas ini (kecuali force)
 #define KL_AUTOOFF_MS       180000UL // kontak ON tapi mesin tak pernah menyala -> mati sendiri
@@ -189,8 +190,8 @@ uint8_t       wakeProf      = 1;          // 0 sigap 2s, 1 normal 4s, 2 hemat 8s
 uint8_t       lockProf      = 1;          // 0 30s, 1 2mnt, 2 5mnt, 3 mati
 bool          neutralReq    = true;       // starter butuh posisi netral
 bool          autoOff       = true;       // kontak ON tanpa mesin -> mati sendiri
-bool          hornIgn       = true;       // klakson butuh bus kontak hidup (umumnya iya)
-bool          warnFar       = true;       // bunyi 2x bila HP menjauh saat kontak ON
+const bool    hornIgn       = false;      // (v4.1) buzzer langsung dari aki: tidak butuh bus kontak. Field 'hi' di frame K dipertahankan = 0
+bool          warnFar       = true;       // kedip pesawat + 2 bip bila HP menjauh saat kontak ON
 int8_t        rssiThr       = KL_NEAR_DEFAULT;
 float         rssiEma       = -100.0f;
 int           rssiN         = 0;
@@ -827,7 +828,7 @@ bool pinGate(JsonDocument& doc, bool allowSet) {
 
 // ============ KEYLESS: RELAY & MASUKAN ============
 void relaysInit() {
-  const uint8_t p[] = {PIN_R_IGN, PIN_R_CDI, PIN_R_START, PIN_R_HORN, PIN_R_TURN_L, PIN_R_TURN_R};
+  const uint8_t p[] = {PIN_R_IGN, PIN_R_CDI, PIN_R_START, PIN_BUZZ, PIN_R_TURN_L, PIN_R_TURN_R};
   for (uint8_t pin : p) { pinMode(pin, OUTPUT); digitalWrite(pin, LOW); }
   pinMode(PIN_KEYSENSE, INPUT);
   pinMode(PIN_NEUTRAL, INPUT);
@@ -865,16 +866,26 @@ void setIgnSession(bool on) {
 }
 
 // ============ KEYLESS: SEKUENS RITING / KLAKSON ============
-struct FStep { uint16_t t; uint8_t m; };          // m bit0 = riting kiri+kanan, bit1 = klakson (keadaan mutlak pada waktu t)
-// "Cari motor": 3 kali kilat ganda ala lampu pesawat, klakson 2x cepat dengan jeda
+struct FStep { uint16_t t; uint8_t m; };          // m bit0 = riting kiri+kanan, bit1 = buzzer (keadaan mutlak pada waktu t)
+// "Cari motor": 3 kali kilat ganda ala lampu pesawat, buzzer 2x cepat dengan jeda
 static const FStep SEQ_FIND[] = {
   {0, 3}, {120, 2}, {150, 0}, {220, 1}, {340, 0}, {600, 2}, {750, 0},
   {1100, 1}, {1220, 0}, {1320, 1}, {1440, 0},
   {2200, 1}, {2320, 0}, {2420, 1}, {2540, 0}, {2650, 0},
 };
-static const FStep SEQ_WARN[] = {{0, 2}, {120, 0}, {240, 2}, {360, 0}, {420, 0}};   // 2 bip: "HP menjauh"
+// "HP menjauh / link putus": 4 riting kedip ganda ala lampu strobo pesawat, 3 siklus (siklus pertama + 2 bip)
+static const FStep SEQ_WARN[] = {
+  {0, 3}, {90, 0}, {170, 3}, {260, 0},
+  {1200, 1}, {1290, 0}, {1370, 1}, {1460, 0},
+  {2400, 1}, {2490, 0}, {2570, 1}, {2660, 0}, {2750, 0},
+};
+// masuk fase terkunci: 2 siklus strobo pesawat + 1 bip pendek (konfirmasi kunci)
+static const FStep SEQ_LOCK[] = {
+  {0, 3}, {90, 0}, {170, 1}, {260, 0},
+  {1200, 1}, {1290, 0}, {1370, 1}, {1460, 0}, {1550, 0},
+};
 static FStep seqDyn[40];                           // alarm / peringatan kill (dibangun saat dipakai)
-enum SeqKind : uint8_t { SQ_NONE, SQ_FIND, SQ_WARN, SQ_ALARM, SQ_KILLWARN };
+enum SeqKind : uint8_t { SQ_NONE, SQ_FIND, SQ_WARN, SQ_ALARM, SQ_KILLWARN, SQ_LOCK };
 SeqKind        seqKind = SQ_NONE;
 const FStep*   seqTbl  = nullptr;
 uint8_t        seqLen = 0, seqIdx = 0;
@@ -884,13 +895,12 @@ bool           seqTempIgn = false;
 void seqOut(uint8_t m) {
   digitalWrite(PIN_R_TURN_L, (m & 1) ? HIGH : LOW);
   digitalWrite(PIN_R_TURN_R, (m & 1) ? HIGH : LOW);
-  digitalWrite(PIN_R_HORN,   (m & 2) ? HIGH : LOW);
+  digitalWrite(PIN_BUZZ,     (m & 2) ? HIGH : LOW);
 }
 void seqStop() {
   seqOut(0);
   seqKind = SQ_NONE;
   seqPreUntil = 0;
-  if (seqTempIgn) { seqTempIgn = false; if (!ignOn) rlyIgn(false); }
   klForce = true;
 }
 bool seqStart(uint8_t k) {
@@ -899,7 +909,8 @@ bool seqStart(uint8_t k) {
   switch (k) {
     case SQ_FIND: seqTbl = SEQ_FIND; seqLen = sizeof(SEQ_FIND) / sizeof(FStep); break;
     case SQ_WARN: seqTbl = SEQ_WARN; seqLen = sizeof(SEQ_WARN) / sizeof(FStep); break;
-    case SQ_ALARM:                                   // 10 dtk: riting menyala 0,5 dtk + klakson 0,25 dtk, tiap 1 dtk
+    case SQ_LOCK: seqTbl = SEQ_LOCK; seqLen = sizeof(SEQ_LOCK) / sizeof(FStep); break;
+    case SQ_ALARM:                                   // 10 dtk: riting menyala 0,5 dtk + buzzer 0,25 dtk, tiap 1 dtk
       for (int i = 0; i < 10; i++) {
         seqDyn[n++] = {(uint16_t)(i * 1000), 3};
         seqDyn[n++] = {(uint16_t)(i * 1000 + 250), 1};
@@ -917,12 +928,6 @@ bool seqStart(uint8_t k) {
   seqKind = (SeqKind)k;
   seqIdx = 0;
   seqT0 = millis();
-  // klakson umumnya mendapat +12 V lewat kontak: nyalakan bus kontak sebentar (CDI tetap putus)
-  if ((k == SQ_FIND || k == SQ_WARN) && hornIgn && !ignRelayOn) {
-    rlyIgn(true);
-    seqTempIgn = true;
-    seqPreUntil = millis() + 350;
-  }
   klForce = true;
   return true;
 }
@@ -964,7 +969,7 @@ void lockNow(const char* why) {
   spPh = SP_NONE;
   if (seqKind != SQ_NONE) seqStop();
   setIgnSession(false);
-  if (why) setNotice(why);
+  if (why) { setNotice(why); seqStart(SQ_LOCK); }   // kedip strobo + bip: konfirmasi terkunci
   klForce = true;
 }
 
@@ -1138,7 +1143,7 @@ void klTick(unsigned long now) {
   else {
     if (!absentSince) absentSince = now;
     unsigned long gone = now - absentSince;
-    if (warnFar && !warned && gone >= 20000UL && seqKind == SQ_NONE) { warned = true; seqStart(SQ_WARN); }
+    if (warnFar && !warned && gone >= KL_FAR_WARN_MS && seqKind == SQ_NONE) { warned = true; seqStart(SQ_WARN); }
     uint16_t lk = LOCK_PROF_S[lockProf & 3];
     // kunci hanya bila HP sudah lama hilang DAN tidak ada pengisian terlihat selama itu (mesin tidak sedang digas)
     if (lk && gone >= lk * 1000UL && sinceHigh(now) >= lk * 1000UL && seqKind == SQ_NONE && spPh == SP_NONE) {
@@ -1185,7 +1190,7 @@ void handleKl(const char* cmd, JsonDocument& doc) {
   return;
 #endif
   unsigned long now = millis();
-  bool busy = (spPh != SP_NONE) || (seqKind != SQ_NONE && seqKind != SQ_ALARM && seqKind != SQ_WARN);
+  bool busy = (spPh != SP_NONE) || (seqKind != SQ_NONE && seqKind != SQ_ALARM && seqKind != SQ_WARN && seqKind != SQ_LOCK);
 
   if (!strcmp(cmd, "kl_mode")) {
     if (ignOn || engineLikelyRunning(now) || busy) { errCode = "busy"; return; }
@@ -1200,7 +1205,7 @@ void handleKl(const char* cmd, JsonDocument& doc) {
       if (!nearOk)      { errCode = "far";   return; }
       if (busy)         { errCode = "busy";  return; }
       if (batteryVoltage < KL_START_MIN_V) { errCode = "lowbat"; return; }
-      if (seqKind == SQ_ALARM || seqKind == SQ_WARN) seqStop();
+      if (seqKind == SQ_ALARM || seqKind == SQ_WARN || seqKind == SQ_LOCK) seqStop();
       setIgnSession(true);
       setNotice("ign_on");
     } else {
@@ -1215,7 +1220,7 @@ void handleKl(const char* cmd, JsonDocument& doc) {
     if (engineLikelyRunning(now))          { errCode = "running"; return; }
     if ((long)(now - startLockUntil) < 0)  { errCode = "cool";    return; }
     if (batteryVoltage < KL_START_MIN_V)   { errCode = "lowbat";  return; }
-    if (seqKind == SQ_ALARM || seqKind == SQ_WARN) seqStop();
+    if (seqKind == SQ_ALARM || seqKind == SQ_WARN || seqKind == SQ_LOCK) seqStop();
     if (!ignOn) { setIgnSession(true); spAt = now + 450; }      // beri waktu bus kontak stabil
     else        { spAt = now + 50; }
     spPh = SP_PREIGN;
@@ -1234,7 +1239,7 @@ void handleKl(const char* cmd, JsonDocument& doc) {
   }
   else if (!strcmp(cmd, "kl_find")) {
     if (ignOn && engineLikelyRunning(now)) { errCode = "busy"; return; }
-    if (seqKind == SQ_ALARM) seqStop();
+    if (seqKind == SQ_ALARM || seqKind == SQ_WARN || seqKind == SQ_LOCK) seqStop();
     if (!seqStart(SQ_FIND)) { errCode = "busy"; return; }
   }
   else if (!strcmp(cmd, "kl_calib")) {
@@ -1247,7 +1252,6 @@ void handleKl(const char* cmd, JsonDocument& doc) {
     if (doc["lk"].is<int>()) { lockProf = (uint8_t)constrain((int)doc["lk"], 0, 3); prefs.putUChar("kl_lk", lockProf); }
     if (doc["nr"].is<int>()) { neutralReq = (int)doc["nr"] != 0; prefs.putBool("kl_nr", neutralReq); }
     if (doc["ao"].is<int>()) { autoOff    = (int)doc["ao"] != 0; prefs.putBool("kl_ao", autoOff); }
-    if (doc["hi"].is<int>()) { hornIgn    = (int)doc["hi"] != 0; prefs.putBool("kl_hi", hornIgn); }
     if (doc["wf"].is<int>()) { warnFar    = (int)doc["wf"] != 0; prefs.putBool("kl_wf", warnFar); }
   }
   else if (!strcmp(cmd, "kl_pair")) {
@@ -1495,7 +1499,7 @@ void notifyTelemetry(unsigned long now) {
     int st = 0;
     if (spPh == SP_PREIGN || spPh == SP_CRANK) st = 2;
     else if (seqKind == SQ_KILLWARN)           st = 4;
-    else if (seqKind != SQ_NONE)               st = 5;
+    else if (seqKind == SQ_FIND || seqKind == SQ_ALARM) st = 5;
     else if (ignOn && engineRunning)           st = 3;
     else if (ignOn)                            st = 1;
     int neu = (klMode == 1 && ignRelayOn) ? (isNeutral() ? 1 : 0) : 2;   // 2 = tidak diketahui (kontak mati)
@@ -1570,7 +1574,6 @@ void loadSettings() {
   lockProf   = (uint8_t)constrain((int)prefs.getUChar("kl_lk", 1), 0, 3);
   neutralReq = prefs.getBool("kl_nr", true);
   autoOff    = prefs.getBool("kl_ao", true);
-  hornIgn    = prefs.getBool("kl_hi", true);
   warnFar    = prefs.getBool("kl_wf", true);
   rssiThr    = prefs.getChar("rssi_thr", KL_NEAR_DEFAULT);
   tamperCount = prefs.getUShort("tamper", 0);

@@ -30,23 +30,23 @@ export type LinkState = "off" | "scanning" | "connecting" | "connected";
 
 /** status keyless dari ESP32 (frame "K|...") */
 export interface KlState {
-  mode: number; // 0 manual (kunci asli), 1 keyless
-  ign: boolean; // kontak keyless ON
-  cdi: boolean; // relay CDI tertutup
-  st: number; // 0 terkunci, 1 kontak ON, 2 starter, 3 mesin hidup, 4 hitung mundur kill, 5 sekuens (cari/alarm)
-  near: boolean; // HP dalam jarak
-  rssi: number; // dBm (0 = belum ada)
-  neutral: number; // 1 netral, 0 gigi, 2 tidak diketahui
+  mode: number;      // 0 manual (kunci asli), 1 keyless
+  ign: boolean;      // kontak keyless ON
+  cdi: boolean;      // relay CDI tertutup
+  st: number;        // 0 terkunci, 1 kontak ON, 2 starter, 3 mesin hidup, 4 hitung mundur kill, 5 sekuens (cari/alarm)
+  near: boolean;     // HP dalam jarak
+  rssi: number;      // dBm (0 = belum ada)
+  neutral: number;   // 1 netral, 0 gigi, 2 tidak diketahui
   run: boolean;
-  thr: number; // ambang dekat (dBm)
-  wake: number; // profil bangun 0..2
-  lock: number; // profil kunci otomatis 0..3
-  nr: boolean; // wajib netral
-  ao: boolean; // kontak mati otomatis
-  hi: boolean; // klakson butuh kontak
-  wf: boolean; // peringatan HP menjauh
-  tamper: number; // jumlah percobaan pembobolan
-  pair: boolean; // ESP sedang membuka mode pairing
+  thr: number;       // ambang dekat (dBm)
+  wake: number;      // profil bangun 0..2
+  lock: number;      // profil kunci otomatis 0..3
+  nr: boolean;       // wajib netral
+  ao: boolean;       // kontak mati otomatis
+  hi: boolean;       // (tidak dipakai sejak v4.1, selalu false)
+  wf: boolean;       // peringatan HP menjauh
+  tamper: number;    // jumlah percobaan pembobolan
+  pair: boolean;     // ESP sedang membuka mode pairing
   calib: boolean;
 }
 
@@ -141,13 +141,8 @@ export async function requestBlePermissions(): Promise<boolean> {
   // Cek dulu TANPA dialog. Saat jalan di headless task (tidak ada Activity),
   // memanggil request*() bisa gagal/hang dan koneksi BLE tidak pernah terbentuk.
   try {
-    const need =
-      api >= 31
-        ? [P.BLUETOOTH_SCAN, P.BLUETOOTH_CONNECT]
-        : [P.ACCESS_FINE_LOCATION];
-    const have = await Promise.all(
-      need.map((p) => PermissionsAndroid.check(p)),
-    );
+    const need = api >= 31 ? [P.BLUETOOTH_SCAN, P.BLUETOOTH_CONNECT] : [P.ACCESS_FINE_LOCATION];
+    const have = await Promise.all(need.map((p) => PermissionsAndroid.check(p)));
     if (have.every(Boolean)) return true;
   } catch {}
 
@@ -179,10 +174,7 @@ function scan(m: BleManager, timeoutMs: number): Promise<Device> {
       fn();
     };
     const timer = setTimeout(
-      () =>
-        finish(() =>
-          reject(new Error("ESP32 tidak ditemukan. Pastikan menyala & dekat.")),
-        ),
+      () => finish(() => reject(new Error("ESP32 tidak ditemukan. Pastikan menyala & dekat."))),
       timeoutMs,
     );
     // Filter by service UUID: nama sering hanya ada di scan response, jadi jangan mengandalkan nama.
@@ -206,8 +198,7 @@ function parseTelemetry(b64: string | null | undefined) {
   if (txt.startsWith("I|")) {
     // "I|nama|baris2" — teks idle yang tersimpan di ESP32
     const q = txt.split("|");
-    if (q.length >= 3)
-      setSnap({ idleName: q[1], idleLine2: q.slice(2).join("|") });
+    if (q.length >= 3) setSnap({ idleName: q[1], idleLine2: q.slice(2).join("|") });
     return;
   }
   if (txt.startsWith("S|")) {
@@ -226,31 +217,13 @@ function parseTelemetry(b64: string | null | undefined) {
     return;
   }
   if (txt.startsWith("K|")) {
-    const q = txt
-      .split("|")
-      .slice(1)
-      .map((x) => parseInt(x, 10));
+    const q = txt.split("|").slice(1).map((x) => parseInt(x, 10));
     if (q.length >= 18 && q.every((x) => Number.isFinite(x))) {
       setSnap({
         kl: {
-          mode: q[0],
-          ign: q[1] === 1,
-          cdi: q[2] === 1,
-          st: q[3],
-          near: q[4] === 1,
-          rssi: q[5],
-          neutral: q[6],
-          run: q[7] === 1,
-          thr: q[8],
-          wake: q[9],
-          lock: q[10],
-          nr: q[11] === 1,
-          ao: q[12] === 1,
-          hi: q[13] === 1,
-          wf: q[14] === 1,
-          tamper: q[15],
-          pair: q[16] === 1,
-          calib: q[17] === 1,
+          mode: q[0], ign: q[1] === 1, cdi: q[2] === 1, st: q[3], near: q[4] === 1, rssi: q[5],
+          neutral: q[6], run: q[7] === 1, thr: q[8], wake: q[9], lock: q[10], nr: q[11] === 1,
+          ao: q[12] === 1, hi: q[13] === 1, wf: q[14] === 1, tamper: q[15], pair: q[16] === 1, calib: q[17] === 1,
         },
       });
     }
@@ -439,8 +412,7 @@ export async function wakeAndConnect(ms = 25000): Promise<boolean> {
   while (Date.now() - t0 < ms) {
     if (snap.link === "connected" && device) return true;
     await new Promise<void>((r) => setTimeout(r, 250));
-    if (snap.link === "off" && !busy && !retryTimer && Date.now() - t0 > 1500)
-      startAutoConnect();
+    if (snap.link === "off" && !busy && !retryTimer && Date.now() - t0 > 1500) startAutoConnect();
   }
   return snap.link === "connected";
 }

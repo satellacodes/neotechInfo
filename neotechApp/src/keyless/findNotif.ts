@@ -1,6 +1,6 @@
 /**
  * Notifikasi "Cari motor": notifikasi menetap di bilah notifikasi HP.
- * Mengetuknya membuka app lalu memerintahkan ESP32: 4 riting kilat ganda 3x + klakson 2x.
+ * Mengetuknya membuka app lalu memerintahkan ESP32: 4 riting kilat ganda 3x + buzzer 2x.
  *
  * Memakai paket `expo-notifications` (harus dipasang: `npx expo install expo-notifications`).
  * Jika paket belum ada, fitur ini otomatis nonaktif dan sisa app tetap jalan.
@@ -42,17 +42,13 @@ export async function enableFindNotif(): Promise<boolean> {
       vibrationPattern: null,
     });
     await N.setNotificationCategoryAsync(CATEGORY, [
-      {
-        identifier: "FIND",
-        buttonTitle: "Cari motor",
-        options: { opensAppToForeground: true },
-      },
+      { identifier: "FIND", buttonTitle: "Cari motor", options: { opensAppToForeground: true } },
     ]);
     await N.scheduleNotificationAsync({
       identifier: NOTIF_ID,
       content: {
         title: "GL Pro — cari motor",
-        body: "Ketuk untuk menyalakan riting & klakson motor",
+        body: "Ketuk untuk menyalakan riting & buzzer motor",
         categoryIdentifier: CATEGORY,
         sticky: true,
         autoDismiss: false,
@@ -80,9 +76,7 @@ export function listenFindNotif(cb: () => void): () => void {
   if (!findNotifAvailable) return () => {};
   let lastHandled = "";
   const handle = (resp: any) => {
-    const id =
-      String(resp?.notification?.date ?? "") +
-      String(resp?.actionIdentifier ?? "");
+    const id = String(resp?.notification?.date ?? "") + String(resp?.actionIdentifier ?? "");
     if (resp?.notification?.request?.content?.data?.action !== "find") return;
     if (id === lastHandled) return;
     lastHandled = id;
